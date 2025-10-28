@@ -23,6 +23,8 @@ Na obecnym etapie repozytorium nie zawiera kodu źródłowego ani gotowych modu�
 | System uprawnień i audytu – Etap 11 | ✔️ | Wdrożono moduł `auth-service` z rolami RBAC/ABAC, polityką audytu i integracją z profilami `config-service`. | "System pilnuje, kto może publikować dane, zapisuje każdą decyzję i pokazuje ją w dzienniku." |
 | Panel administratora (Studio Danych) – Etap 12 | ✔️ | Dodano moduł `admin_gateway` z konfiguracją globalną, filtrowaniem menu po rolach, rejestracją instancji WordPress i generatorem paczek instalacyjnych ZIP. | "W panelu ustawisz adres API, zsynchronizujesz WordPressa i pobierzesz paczkę ZIP jednym kliknięciem." |
 | Moduł wizualizacji podstawowych – Etap 13 | ✔️ | Udostępniono `visualization-service` generujący wykresy PNG/JPG/PDF z podglądów transformacji, zgodny z DCAT-AP i API BDL. | "Wskaż dane i typ wykresu, a system wygeneruje gotowy obraz i PDF do publikacji." |
+| Zaawansowane wizualizacje i dashboardy – Etap 14 | ✔️ | Rozbudowano `visualization-service` o mapy (choroplety), heatmapy, wykresy kombinowane i panele KPI z raportami JSON oraz trybem zastępczym bez Matplotlib. | "Wybierz mapę lub dashboard KPI, a system przygotuje pliki do publikacji nawet w środowisku bez dodatkowych bibliotek." |
+| Generator raportów – Etap 15 | ✔️ | Udostępniono `report_service` łączący wizualizacje, metadane DCAT-AP i pliki JSON-LD w raportach HTML/PDF z fallbackiem offline. | "Jednym kliknięciem wygenerujesz raport z wykresami, opisem i metadanymi gotowy do publikacji lub wysyłki." |
 | Kompatybilność WordPress – moduł mostkowy | ✔️ | Do repozytorium dołączono wtyczkę `wordpress/open-data-plugin` integrującą się z kontraktami REST/GraphQL i wykorzystującą WordPress jako bazę publikacji. | "Skopiuj wtyczkę do katalogu WordPress, aktywuj i zarządzaj danymi w panelu Studio Danych." |
 
 ## Etap 1 – Szczegółowa specyfikacja techniczna
@@ -693,6 +695,76 @@ Danych, mostkiem WordPress i automatyzacją raportów.
    wymaganiami API BDL.
 
 
+## Etap 14 – Zaawansowane wizualizacje i dashboardy
+Etap 14 rozszerza moduł `visualization-service` o mapy choropletyczne, heatmapy, wykresy kombinowane oraz panele KPI z raportami JSON. Dodano także tryb zastępczy – w środowiskach bez biblioteki Matplotlib generowane są pliki graficzne (placeholdery) i raporty, co zapewnia ciągłość publikacji danych zgodnie z wymaganiami dane.gov.pl i API BDL.
+
+### 1. Zakres i cele
+- Obsługa zaawansowanych typów wizualizacji (`heatmap`, `choropleth`, `combo`, `kpi_dashboard`) z wykorzystaniem konfiguracji profilu (`visualization.advanced`).
+- Automatyczne tworzenie raportu JSON (`*-summary.json`) zawierającego metadane wykresu, listę serii, zastosowane metryki KPI oraz informację o trybie zastępczym.
+- Zapewnienie fallbacku w środowisku offline – generowane są pliki PNG/JPG/PDF z placeholderami oraz pełny raport JSON, dzięki czemu Studio Danych i WordPress zachowują spójny przepływ publikacji.
+
+### 2. Komponenty techniczne
+- `src/visualization_service/service.py` – rozbudowany `VisualizationService` z rendererami heatmap, choropleth, combo, panelu KPI oraz generatorem plików zastępczych i raportów JSON.
+- `src/visualization_service/models.py` – rozszerzone modele `VisualizationRequest` (pole `options`) i `VisualizationProduct` (`summary_path`).
+- `src/ingestion_service/profile.py` – nowa klasa `VisualizationAdvancedSettings`, domyślne ustawienia i parser sekcji `visualization.advanced`.
+- `config/profiles/dev.json` – zaktualizowana sekcja `visualization` z listą nowych typów wykresów, paletami heatmap/choropleth i metrykami KPI.
+- `tests/test_visualization_service.py` – scenariusze obejmujące tryb zastępczy, heatmapy oraz panele KPI.
+
+### 3. Proces generowania zaawansowanych wizualizacji
+1. Pipeline transformacji przygotowuje podgląd danych (`*-transformed.json`).
+2. Studio Danych lub WordPress wysyła `VisualizationRequest` z typem wykresu (`heatmap`, `choropleth`, `combo` lub `kpi_dashboard`) oraz dodatkowymi opcjami (np. `region_field`).
+3. `VisualizationService` oblicza serie danych i – jeśli dostępny – wykorzystuje Matplotlib do wygenerowania wykresów; w trybie fallback tworzy pliki zastępcze oraz raport JSON.
+4. Moduł zapisuje pliki w `build/visualizations` oraz generuje raport `*-summary.json`, który zawiera metadane, wykorzystane metryki i status renderera.
+
+### 4. Kryteria akceptacyjne
+- Profil konfiguracyjny zawiera sekcję `visualization.advanced` z ustawieniami map, palet i metryk KPI.
+- `VisualizationService` tworzy pliki graficzne (lub placeholdery) oraz raport JSON dla każdego rodzaju wizualizacji.
+- Testy `tests/test_visualization_service.py` potwierdzają generowanie plików w trybie podstawowym i zastępczym, w tym poprawność metryk KPI.
+- Studio Danych i wtyczka WordPress mogą publikować mapy, heatmapy i dashboardy korzystając z tych samych kontraktów API.
+
+### Instrukcje dla laika
+1. **Co zostało dodane?** Możesz tworzyć mapy regionów, heatmapy oraz panele KPI – system generuje obrazki i raport JSON.
+2. **Jak używać?** W Studio Danych wybierz „Zaawansowana wizualizacja”, wskaż typ (np. heatmapa), kolumny oraz – w przypadku map – pole regionu. System zapisze pliki w `build/visualizations` oraz raport `*-summary.json`.
+3. **Przykład:** Dla datasetu z kolumnami `region`, `population`, `budget` wybierz wizualizację `choropleth`. Otrzymasz pliki PNG/PDF z barwioną mapą regionów (lub placeholder, jeśli Matplotlib nie jest dostępny) oraz raport JSON z wartościami.
+4. **Korzyść:** Dashboardy KPI i mapy można publikować nawet w środowisku o ograniczonych zasobach – użytkownicy końcowi widzą spójne metryki i wizualizacje zgodne ze standardami państwowymi.
+
+
+## Etap 15 – Generator raportów
+Etap 15 dodaje usługę `report_service`, która scala wizualizacje, metadane DCAT-AP i pliki JSON-LD w raporty HTML/PDF. Moduł współpracuje z `visualization-service`, `metadata_service` oraz konfiguracją profili, zachowując zgodność z wytycznymi dane.gov.pl, API BDL i standardami UE. Zapewnia tryb offline – gdy renderowanie PDF nie jest dostępne, generuje pliki zastępcze o poprawnym nagłówku, co pozwala utrzymać ciągłość publikacji.
+
+### 1. Zakres i cele
+- Automatyczne tworzenie raportów HTML i PDF łączących wykresy, statystyki KPI oraz metadane DCAT-AP z registry `metadata_service`.
+- Dołączanie eksportów JSON-LD i raportów `*-summary.json` do finalnego raportu wraz z informacją o źródłach danych i harmonogramach aktualizacji.
+- Zapewnienie zgodności z profilem konfiguracji (`reports`) – katalog wyjściowy, lista formatów, szablony HTML, przypisanie odpowiedzialnych osób.
+- Tryb awaryjny dla środowisk bez zewnętrznych rendererów PDF: generator tworzy plik o nagłówku `%PDF-1.4` z krótkim streszczeniem i wskazaniem do pełnej wersji HTML.
+
+### 2. Komponenty techniczne
+- `src/report_service/service.py` – `ReportService` generujący raporty na podstawie konfiguracji profilu, wizualizacji i metadanych.
+- `src/report_service/models.py` – modele `ReportRequest` i `ReportProduct` opisujące wejście/wyjście generatora.
+- `src/ingestion_service/profile.py` – klasy `ReportSettings` i parser sekcji `reports` z obsługą katalogów, formatów i flag zgodności.
+- `config/profiles/dev.json` – sekcja `reports` z katalogiem `build/reports`, formatami (`html`, `pdf`), wskazaniem szablonu oraz preferencją dołączania JSON-LD.
+- `tests/test_report_service.py` – scenariusze weryfikujące generowanie raportów HTML/PDF, wstawianie wykresów, metadanych i fallback offline.
+
+### 3. Proces generowania raportu
+1. Studio Danych zbiera `VisualizationProduct`, raport `TransformationReport` oraz rekord `DatasetMetadata`.
+2. Wywołuje `ReportService.generate()` z danymi oraz listą wykresów i ścieżkami do plików JSON-LD/summary.
+3. Usługa renderuje szablon HTML (z repozytorium lub wbudowany) i zapisuje raport do katalogu `build/reports`.
+4. Jeżeli format PDF jest wymagany, generator tworzy minimalny dokument PDF; w razie braku zależności zewnętrznych korzysta z trybu fallback.
+5. `ReportProduct` zwraca listę plików raportu, dołączonych załączników i komunikat statusu (np. o użytym trybie zastępczym).
+
+### 4. Kryteria akceptacyjne
+- Profil konfiguracyjny zawiera kompletną sekcję `reports` z katalogiem, formatami oraz ścieżką szablonu.
+- `ReportService` generuje raport HTML zawierający tytuł datasetu, metadane DCAT-AP, listę wykresów i odnośniki do JSON-LD.
+- Wymagane formaty (HTML/PDF) powstają nawet bez zewnętrznych bibliotek – plik PDF zawiera poprawny nagłówek `%PDF-1.4`.
+- Testy jednostkowe `tests/test_report_service.py` oraz pełny pakiet `pytest` kończą się sukcesem.
+- Studio Danych i mostek WordPress mogą pobierać raporty jednym kliknięciem, zachowując zgodność z DCAT-AP i API BDL.
+
+### Instrukcje dla laika
+1. **Co zostało dodane?** System tworzy kompletne raporty łączące wykresy, opis danych, licencję i kontakt – gotowe do wysyłki lub publikacji.
+2. **Jak używać?** W Studio Danych przejdź do zakładki „Raporty” → „Generuj raport”, wybierz dataset oraz wizualizacje dołączane do dokumentu i zatwierdź.
+3. **Przykład:** Wybierz dataset populacji, zaznacz wykres liniowy i dashboard KPI, a moduł utworzy `build/reports/population-report.html` oraz `population-report.pdf` wraz z JSON-LD.
+4. **Korzyść:** Interesariusze otrzymują kompletny raport zgodny z normami państwowymi – z wykresami, licencją i kontaktem do administratora, bez ręcznego składania dokumentów.
+
 ## Etap 4 – Import CSV
 Etap 4 dostarczył produkcyjny moduł importu CSV w `ingestion-service`, zgodny z profilami konfiguracji oraz kontraktami API etapu 3A. Funkcjonalność obejmuje pełny przepływ od walidacji pliku, przez opis kolumn, po generowanie podglądów i sugestii wizualizacji.
 
@@ -794,6 +866,40 @@ rekordów oraz sugestie wizualizacji oparte na strukturze odpowiedzi.
    liniowego.
 4. **Korzyść:** Dane z portali państwowych trafiają do katalogu bez ręcznego pobierania i transformacji, zachowując standardy
    bezpieczeństwa i audytu.
+
+## Etap 14 – Zaawansowane wizualizacje i dashboardy
+Etap 14 rozszerza moduł `visualization-service` o mapy choropletyczne, heatmapy, wykresy kombinowane oraz panele KPI z raportami JSON. Dodano także tryb zastępczy – w środowiskach bez biblioteki Matplotlib generowane są pliki graficzne (placeholdery) i raporty, co zapewnia ciągłość publikacji danych zgodnie z wymaganiami dane.gov.pl i API BDL.
+
+### 1. Zakres i cele
+- Obsługa zaawansowanych typów wizualizacji (`heatmap`, `choropleth`, `combo`, `kpi_dashboard`) z wykorzystaniem konfiguracji profilu (`visualization.advanced`).
+- Automatyczne tworzenie raportu JSON (`*-summary.json`) zawierającego metadane wykresu, listę serii, zastosowane metryki KPI oraz informację o trybie zastępczym.
+- Zapewnienie fallbacku w środowisku offline – generowane są pliki PNG/JPG/PDF z placeholderami oraz pełny raport JSON, dzięki czemu Studio Danych i WordPress zachowują spójny przepływ publikacji.
+
+### 2. Komponenty techniczne
+- `src/visualization_service/service.py` – rozbudowany `VisualizationService` z rendererami heatmap, choropleth, combo, panelu KPI oraz generatorem plików zastępczych i raportów JSON.
+- `src/visualization_service/models.py` – rozszerzone modele `VisualizationRequest` (pole `options`) i `VisualizationProduct` (`summary_path`).
+- `src/ingestion_service/profile.py` – nowa klasa `VisualizationAdvancedSettings`, domyślne ustawienia i parser sekcji `visualization.advanced`.
+- `config/profiles/dev.json` – zaktualizowana sekcja `visualization` z listą nowych typów wykresów, paletami heatmap/choropleth i metrykami KPI.
+- `tests/test_visualization_service.py` – scenariusze obejmujące tryb zastępczy, heatmapy oraz panele KPI.
+
+### 3. Proces generowania zaawansowanych wizualizacji
+1. Pipeline transformacji przygotowuje podgląd danych (`*-transformed.json`).
+2. Studio Danych lub WordPress wysyła `VisualizationRequest` z typem wykresu (`heatmap`, `choropleth`, `combo` lub `kpi_dashboard`) oraz dodatkowymi opcjami (np. `region_field`).
+3. `VisualizationService` oblicza serie danych i – jeśli dostępny – wykorzystuje Matplotlib do wygenerowania wykresów; w trybie fallback tworzy pliki zastępcze oraz raport JSON.
+4. Moduł zapisuje pliki w `build/visualizations` oraz generuje raport `*-summary.json`, który zawiera metadane, wykorzystane metryki i status renderera.
+
+### 4. Kryteria akceptacyjne
+- Profil konfiguracyjny zawiera sekcję `visualization.advanced` z ustawieniami map, palet i metryk KPI.
+- `VisualizationService` tworzy pliki graficzne (lub placeholdery) oraz raport JSON dla każdego rodzaju wizualizacji.
+- Testy `tests/test_visualization_service.py` potwierdzają generowanie plików w trybie podstawowym i zastępczym, w tym poprawność metryk KPI.
+- Studio Danych i wtyczka WordPress mogą publikować mapy, heatmapy i dashboardy korzystając z tych samych kontraktów API.
+
+### Instrukcje dla laika
+1. **Co zostało dodane?** Możesz tworzyć mapy regionów, heatmapy oraz panele KPI – system generuje obrazki i raport JSON.
+2. **Jak używać?** W Studio Danych wybierz „Zaawansowana wizualizacja”, wskaż typ (np. heatmapa), kolumny oraz – w przypadku map – pole regionu. System zapisze pliki w `build/visualizations` oraz raport `*-summary.json`.
+3. **Przykład:** Dla datasetu z kolumnami `region`, `population`, `budget` wybierz wizualizację `choropleth`. Otrzymasz pliki PNG/PDF z barwioną mapą regionów (lub placeholder, jeśli Matplotlib nie jest dostępny) oraz raport JSON z wartościami.
+4. **Korzyść:** Dashboardy KPI i mapy można publikować nawet w środowisku o ograniczonych zasobach – użytkownicy końcowi widzą spójne metryki i wizualizacje zgodne ze standardami państwowymi.
+
 
 ## Etap 4 – Import CSV
 Etap 4 dostarczył produkcyjny moduł importu CSV w `ingestion-service`, zgodny z profilami konfiguracji oraz kontraktami API etapu 3A. Funkcjonalność obejmuje pełny przepływ od walidacji pliku, przez opis kolumn, po generowanie podglądów i sugestii wizualizacji.

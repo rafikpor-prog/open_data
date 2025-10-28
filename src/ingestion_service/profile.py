@@ -5,7 +5,7 @@ potrzeby importu CSV, XLSX, źródeł JSON/API, synchronizacji zdalnych URL (Eta
 integracji bazodanowej (Etap 8), pipeline'u transformacji danych (Etap 9),
 warstwy metadanych DCAT-AP (Etap 10), systemu uprawnień i audytu (Etap 11),
 panelu administracyjnego Studio Danych z integracją WordPress (Etap 12) oraz
-modułu wizualizacji podstawowych (Etap 13).
+modułu wizualizacji podstawowych i zaawansowanych (Etapy 13–14) oraz generatora raportów (Etap 15).
 Funkcje i klasy:
 - class ConfigProfile: reprezentuje kompletny profil konfiguracji ingestu.
 - class StoragePaths: przechowuje ścieżki zapisu danych i schematów.
@@ -21,6 +21,10 @@ Funkcje i klasy:
 - class MetadataPolicy: zasady katalogowania (licencja, kontakt, słowa kluczowe).
 - class AdminStudioSection / AdminWordPressSection / AdminSettings: konfiguracja
   panelu Studio Danych i integracji WordPress (Etap 12).
+- class VisualizationAdvancedSettings / VisualizationSettings: konfiguracja modułu
+  wizualizacji podstawowych i zaawansowanych (Etapy 13–14).
+- class ReportTemplateSettings / ReportAuthoringSettings / ReportSettings: ustawienia
+  generatora raportów HTML/PDF (Etap 15).
 - class RoleDefinition: opis roli RBAC wykorzystywany przez etap 11.
 - class AuditPolicy: zasady retencji i lokalizacji logów audytu.
 - class AuthPolicy: konfiguracja systemu uprawnień (RBAC/ABAC) i audytu.
@@ -224,15 +228,57 @@ class RemotePolicy:
 
 
 @dataclass(frozen=True)
+class VisualizationAdvancedSettings:
+    """
+    Technical description:
+        Definiuje ustawienia zaawansowanych wizualizacji (Etap 14). Pozwala
+        kontrolować obsługę map (pole `map_region_field`), paletę heatmap,
+        paletę choropleth, listę metryk KPI oraz układ dashboardu Studio Danych.
+        Dzięki temu moduł wizualizacji może tworzyć mapy, heatmapy, wykresy
+        kombinowane i panele KPI zgodne z wytycznymi dane.gov.pl oraz API BDL.
+
+    Instructions for laika:
+        "To lista dodatkowych ustawień dla map i dashboardów. Określasz tutaj,
+        jak nazywa się kolumna z regionem, jakie kolory ma mieć heatmapa oraz
+        jakie metryki pojawią się w panelu KPI. Dzięki temu każdy raport będzie
+        wyglądał spójnie."
+
+    Example:
+        ```python
+        advanced = VisualizationAdvancedSettings(
+            enable_advanced=True,
+            map_region_field="region",
+            heatmap_palette=("#08306B", "#08519C", "#2171B5"),
+            choropleth_palette=("#1D70B8", "#3B8AC4", "#6BB1D8"),
+            kpi_metrics=("sum", "avg", "max"),
+            dashboard_layout=("metric", "chart", "notes"),
+        )
+        ```
+    Effect for end user:
+        Administrator otrzymuje mapy i dashboardy zgodne z brandingiem GOV.PL,
+        a użytkownik końcowy widzi te same kolory i metryki w każdej instalacji
+        WordPressa.
+    """
+
+    enable_advanced: bool
+    map_region_field: str
+    heatmap_palette: Sequence[str]
+    choropleth_palette: Sequence[str]
+    kpi_metrics: Sequence[str]
+    dashboard_layout: Sequence[str]
+
+
+@dataclass(frozen=True)
 class VisualizationSettings:
     """
     Technical description:
-        Reprezentuje ustawienia modułu wizualizacji (Etap 13). Określa katalog
+        Reprezentuje ustawienia modułu wizualizacji (Etapy 13–14). Określa katalog
         wyjściowy (`output_dir`), domyślne formaty eksportu (np. PNG, PDF),
         wspierane typy wykresów (`default_chart_types`), rozmiar figury (w
         calach), rozdzielczość DPI, paletę kolorów, kolor tła, maksymalną liczbę
-        serii renderowanych jednocześnie oraz prefiks tytułów generowanych
-        automatycznie.
+        serii renderowanych jednocześnie, prefiks tytułów generowanych
+        automatycznie oraz ustawienia sekcji `advanced` odpowiedzialnej za mapy,
+        heatmapy i panele KPI.
 
     Instructions for laika:
         "To lista ustawień mówiących, gdzie zapisać obrazki z wykresami, w jakich
@@ -244,19 +290,27 @@ class VisualizationSettings:
         viz = VisualizationSettings(
             output_dir="build/visualizations",
             default_formats=("png", "pdf"),
-            default_chart_types=("line", "bar"),
+            default_chart_types=("line", "bar", "heatmap"),
             figure_size=(10, 6),
             dpi=150,
             color_palette=("#0A6FB4", "#59B4D1"),
             background_color="#FFFFFF",
             max_series=4,
             title_prefix="Wizualizacja",
+            advanced=VisualizationAdvancedSettings(
+                enable_advanced=True,
+                map_region_field="region",
+                heatmap_palette=("#08306B", "#2171B5"),
+                choropleth_palette=("#1D70B8", "#3B8AC4"),
+                kpi_metrics=("sum", "avg", "max"),
+                dashboard_layout=("metric", "chart", "notes"),
+            ),
         )
         ```
     Effect for end user:
-        Administrator i WordPress otrzymują wykresy o jednolitej stylistyce,
-        przygotowane w odpowiednich formatach wymaganych przez dane.gov.pl
-        oraz API BDL.
+        Administrator i WordPress otrzymują wykresy, mapy i panele KPI o
+        jednolitej stylistyce, przygotowane w formatach wymaganych przez
+        dane.gov.pl oraz API BDL.
     """
 
     output_dir: str
@@ -268,6 +322,120 @@ class VisualizationSettings:
     background_color: str
     max_series: int
     title_prefix: str
+    advanced: VisualizationAdvancedSettings
+
+
+@dataclass(frozen=True)
+class ReportTemplateSettings:
+    """
+    Technical description:
+        Określa ustawienia szablonu raportu (Etap 15). Zawiera ścieżkę do
+        pliku HTML, prefiks tytułu oraz flagę `include_styles`, która
+        decyduje o osadzaniu stylów CSS w wygenerowanym dokumencie.
+        Szablon jest używany przez `ReportService` zarówno podczas tworzenia
+        raportów HTML, jak i przy generowaniu fallbacku PDF.
+
+    Instructions for laika:
+        "To ustawienia wyglądu raportu. Wskazujesz plik HTML, z którego
+        korzystamy, oraz to, czy mamy dołączyć style w samym dokumencie.
+        Dzięki temu każdy raport wygląda tak samo, niezależnie od tego,
+        kto go generuje."
+
+    Example:
+        ```python
+        template = ReportTemplateSettings(
+            html="templates/report.html",
+            title_prefix="Raport danych",
+            include_styles=True,
+        )
+        ```
+    Effect for end user:
+        Raporty mają spójny wygląd i nagłówki zgodne z identyfikacją
+        wizualną instytucji publikującej dane.
+    """
+
+    html: str
+    title_prefix: str
+    include_styles: bool
+
+
+@dataclass(frozen=True)
+class ReportAuthoringSettings:
+    """
+    Technical description:
+        Przechowuje informacje o autorze raportu – nazwę jednostki i adres
+        kontaktowy. Dane te trafiają do stopki dokumentu, co jest wymagane
+        przez wytyczne dane.gov.pl oraz API BDL w zakresie transparentności
+        publikacji.
+
+    Instructions for laika:
+        "Wpisujesz, kto przygotował raport i na jaki e-mail można wysłać
+        pytania. Dzięki temu odbiorca zawsze wie, z kim się skontaktować."
+
+    Example:
+        ```python
+        authoring = ReportAuthoringSettings(
+            prepared_by="Biuro Otwartego Dostępu",
+            contact_email="reports@example.gov",
+        )
+        ```
+    Effect for end user:
+        Czytelnik raportu widzi dane kontaktowe i może łatwo zgłosić pytania
+        lub uwagi dotyczące opublikowanych informacji.
+    """
+
+    prepared_by: str
+    contact_email: str
+
+
+@dataclass(frozen=True)
+class ReportSettings:
+    """
+    Technical description:
+        Definiuje parametry generatora raportów (Etap 15). Określa katalog
+        wyjściowy, listę formatów (np. HTML, PDF), ustawienia szablonu oraz
+        flagi decydujące o dołączaniu podsumowań wizualizacji, eksportów
+        JSON-LD i śladów audytu. Pola `authoring` i `template` zapewniają, że
+        raport zawiera komplet informacji wymaganych przez standardy UE.
+
+    Instructions for laika:
+        "To konfiguracja kreatora raportów. Mówisz systemowi, gdzie zapisać
+        pliki, w jakich formatach mają powstać i czy dołączyć podsumowania
+        wykresów lub JSON-LD. Dzięki temu raport powstaje jednym kliknięciem
+        bez ręcznej edycji."
+
+    Example:
+        ```python
+        reports = ReportSettings(
+            output_dir="build/reports",
+            formats=("html", "pdf"),
+            template=ReportTemplateSettings(
+                html="templates/report.html",
+                title_prefix="Raport danych",
+                include_styles=True,
+            ),
+            include_visualization_summary=True,
+            attach_jsonld=True,
+            include_audit_trail=True,
+            authoring=ReportAuthoringSettings(
+                prepared_by="Biuro Otwartego Dostępu",
+                contact_email="reports@example.gov",
+            ),
+        )
+        ```
+    Effect for end user:
+        Administrator otrzymuje kompletne raporty z wykresami, licencją i
+        informacjami kontaktowymi – zgodne z oczekiwaniami interesariuszy
+        i gotowe do publikacji w portalu danych publicznych.
+    """
+
+    output_dir: str
+    formats: Sequence[str]
+    template: ReportTemplateSettings
+    include_visualization_summary: bool
+    attach_jsonld: bool
+    include_audit_trail: bool
+    authoring: ReportAuthoringSettings
 
 
 @dataclass(frozen=True)
@@ -711,17 +879,48 @@ def _default_metadata_policy() -> MetadataPolicy:
     )
 
 
+def _default_visualization_advanced_settings() -> VisualizationAdvancedSettings:
+    return VisualizationAdvancedSettings(
+        enable_advanced=True,
+        map_region_field="region",
+        heatmap_palette=("#08306B", "#2171B5", "#6BAED6", "#C6DBEF", "#F7FBFF"),
+        choropleth_palette=("#1D70B8", "#3B8AC4", "#6BB1D8", "#98CBE4"),
+        kpi_metrics=("sum", "avg", "min", "max", "median"),
+        dashboard_layout=("metric", "chart", "notes"),
+    )
+
+
 def _default_visualization_settings() -> VisualizationSettings:
     return VisualizationSettings(
-        output_dir="./data/visualizations",
+        output_dir="build/visualizations",
         default_formats=("png", "pdf"),
-        default_chart_types=("line", "bar"),
+        default_chart_types=("line", "bar", "area"),
         figure_size=(10, 6),
         dpi=150,
-        color_palette=("#0A6FB4", "#59B4D1", "#F2A007", "#C0392B"),
+        color_palette=("#0A6FB4", "#59B4D1", "#8DD3E1", "#BEE4EE"),
         background_color="#FFFFFF",
         max_series=4,
         title_prefix="Wizualizacja",
+        advanced=_default_visualization_advanced_settings(),
+    )
+
+
+def _default_report_settings() -> ReportSettings:
+    return ReportSettings(
+        output_dir="build/reports",
+        formats=("html", "pdf"),
+        template=ReportTemplateSettings(
+            html="templates/report.html",
+            title_prefix="Raport danych",
+            include_styles=True,
+        ),
+        include_visualization_summary=True,
+        attach_jsonld=True,
+        include_audit_trail=True,
+        authoring=ReportAuthoringSettings(
+            prepared_by="Open Data Team",
+            contact_email="reports@example.gov",
+        ),
     )
 
 
@@ -868,8 +1067,8 @@ class ConfigProfile:
         kontekst użycia profilu. Profil zawiera także polityki synchronizacji URL
         (etap 7), integracji bazodanowej (etap 8), pipeline'u transformacji danych
         (etap 9), warstwy metadanych (etap 10), systemu uprawnień i audytu (etap 11),
-        ustawienia panelu Studio Danych/WordPress (etap 12) oraz modułu wizualizacji
-        podstawowych (etap 13).
+        ustawienia panelu Studio Danych/WordPress (etap 12), modułu wizualizacji
+        podstawowych i zaawansowanych (etapy 13–14) oraz generatora raportów (etap 15).
 
     Instructions for laika:
         "To komplet ustawień nazwany np. 'produkcja' lub 'test'. Wystarczy wskazać
@@ -908,6 +1107,7 @@ class ConfigProfile:
     visualization_settings: VisualizationSettings = field(default_factory=_default_visualization_settings)
     metadata_storage: MetadataStorage = field(default_factory=_default_metadata_storage)
     metadata_policy: MetadataPolicy = field(default_factory=_default_metadata_policy)
+    report_settings: ReportSettings = field(default_factory=_default_report_settings)
     auth_policy: Optional[AuthPolicy] = None
     admin_settings: Optional[AdminSettings] = None
 
@@ -923,8 +1123,8 @@ def profile_from_dict(payload: Dict[str, object]) -> ConfigProfile:
         zdalnych URL (Etap 7), integrację bazodanową (Etap 8), pipeline
         transformacji danych (Etap 9), warstwę metadanych (Etap 10), ustawienia
         systemu uprawnień i audytu (Etap 11), konfigurację panelu
-        administracyjnego/WordPress (Etap 12) oraz parametry modułu
-        wizualizacji (Etap 13).
+        administracyjnego/WordPress (Etap 12), parametry modułu wizualizacji
+        (Etapy 13–14) oraz generatora raportów (Etap 15).
 
     Instructions for laika:
         "Otrzymujemy słownik z ustawieniami (np. z API). Ta funkcja zamienia go na
@@ -1114,8 +1314,35 @@ def profile_from_dict(payload: Dict[str, object]) -> ConfigProfile:
         figure_size = (10.0, 6.0)
     else:
         figure_size = tuple(figure_size_values)
+    advanced_dict = visualization_dict.get("advanced") or {}
+    visualization_advanced = VisualizationAdvancedSettings(
+        enable_advanced=bool(advanced_dict.get("enable_advanced", True)),
+        map_region_field=str(advanced_dict.get("map_region_field", "region")),
+        heatmap_palette=tuple(
+            advanced_dict.get(
+                "heatmap_palette",
+                ["#08306B", "#2171B5", "#6BAED6", "#C6DBEF", "#F7FBFF"],
+            )
+        ),
+        choropleth_palette=tuple(
+            advanced_dict.get(
+                "choropleth_palette",
+                ["#1D70B8", "#3B8AC4", "#6BB1D8", "#98CBE4"],
+            )
+        ),
+        kpi_metrics=tuple(
+            advanced_dict.get(
+                "kpi_metrics",
+                ["sum", "avg", "min", "max", "median"],
+            )
+        ),
+        dashboard_layout=tuple(
+            advanced_dict.get("dashboard_layout", ["metric", "chart", "notes"])
+        ),
+    )
+
     visualization_settings = VisualizationSettings(
-        output_dir=str(visualization_dict.get("output_dir", "./data/visualizations")),
+        output_dir=str(visualization_dict.get("output_dir", "build/visualizations")),
         default_formats=tuple(visualization_dict.get("default_formats", ["png", "pdf"])),
         default_chart_types=tuple(
             visualization_dict.get("default_chart_types", ["line", "bar", "area"])
@@ -1125,12 +1352,13 @@ def profile_from_dict(payload: Dict[str, object]) -> ConfigProfile:
         color_palette=tuple(
             visualization_dict.get(
                 "color_palette",
-                ["#0A6FB4", "#59B4D1", "#F2A007", "#C0392B"],
+                ["#0A6FB4", "#59B4D1", "#8DD3E1", "#BEE4EE"],
             )
         ),
         background_color=str(visualization_dict.get("background_color", "#FFFFFF")),
         max_series=int(visualization_dict.get("max_series", 4)),
         title_prefix=str(visualization_dict.get("title_prefix", "Wizualizacja")),
+        advanced=visualization_advanced,
     )
 
     metadata_storage_dict = metadata_dict.get("storage") or {}
@@ -1157,6 +1385,26 @@ def profile_from_dict(payload: Dict[str, object]) -> ConfigProfile:
         default_temporal_end=metadata_policy_dict.get("default_temporal_end"),
     )
 
+    reports_dict = payload.get("reports") or {}
+    template_dict = reports_dict.get("template") or {}
+    authoring_dict = reports_dict.get("authoring") or {}
+    report_settings = ReportSettings(
+        output_dir=str(reports_dict.get("output_dir", "build/reports")),
+        formats=tuple(reports_dict.get("formats", ["html", "pdf"])),
+        template=ReportTemplateSettings(
+            html=str(template_dict.get("html", "templates/report.html")),
+            title_prefix=str(template_dict.get("title_prefix", "Raport danych")),
+            include_styles=bool(template_dict.get("include_styles", True)),
+        ),
+        include_visualization_summary=bool(reports_dict.get("include_visualization_summary", True)),
+        attach_jsonld=bool(reports_dict.get("attach_jsonld", True)),
+        include_audit_trail=bool(reports_dict.get("include_audit_trail", True)),
+        authoring=ReportAuthoringSettings(
+            prepared_by=str(authoring_dict.get("prepared_by", "Open Data Team")),
+            contact_email=str(authoring_dict.get("contact_email", "reports@example.gov")),
+        ),
+    )
+
     auth_policy = _parse_auth_policy(auth_dict)
     admin_settings = _parse_admin_settings(admin_dict)
 
@@ -1176,6 +1424,7 @@ def profile_from_dict(payload: Dict[str, object]) -> ConfigProfile:
         visualization_settings=visualization_settings,
         metadata_storage=metadata_storage,
         metadata_policy=metadata_policy,
+        report_settings=report_settings,
         auth_policy=auth_policy,
         admin_settings=admin_settings,
     )

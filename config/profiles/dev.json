@@ -1,6 +1,6 @@
 {
   "name": "dev",
-  "description": "Profil developerski zgodny z etapami 3-13 konfiguracji",
+  "description": "Profil developerski zgodny z etapami 3-15 konfiguracji",
   "storage": {
     "landing": "build/landing",
     "schema_registry": "build/schemas",
@@ -164,7 +164,11 @@
     "default_chart_types": [
       "line",
       "bar",
-      "area"
+      "area",
+      "heatmap",
+      "choropleth",
+      "combo",
+      "kpi_dashboard"
     ],
     "figure_size": [
       10,
@@ -174,12 +178,41 @@
     "color_palette": [
       "#0A6FB4",
       "#59B4D1",
-      "#F2A007",
-      "#C0392B"
+      "#8DD3E1",
+      "#BEE4EE"
     ],
     "background_color": "#FFFFFF",
     "max_series": 4,
-    "title_prefix": "Wizualizacja"
+    "title_prefix": "Wizualizacja",
+    "advanced": {
+      "enable_advanced": true,
+      "map_region_field": "region",
+      "heatmap_palette": [
+        "#08306B",
+        "#2171B5",
+        "#6BAED6",
+        "#C6DBEF",
+        "#F7FBFF"
+      ],
+      "choropleth_palette": [
+        "#1D70B8",
+        "#3B8AC4",
+        "#6BB1D8",
+        "#98CBE4"
+      ],
+      "kpi_metrics": [
+        "sum",
+        "avg",
+        "min",
+        "max",
+        "median"
+      ],
+      "dashboard_layout": [
+        "metric",
+        "chart",
+        "notes"
+      ]
+    }
   },
   "metadata": {
     "storage": {
@@ -208,6 +241,25 @@
       "auto_publish_jsonld": true,
       "default_temporal_start": "2020-01-01",
       "default_temporal_end": null
+    }
+  },
+  "reports": {
+    "output_dir": "build/reports",
+    "formats": [
+      "html",
+      "pdf"
+    ],
+    "template": {
+      "html": "templates/report.html",
+      "title_prefix": "Raport danych",
+      "include_styles": true
+    },
+    "include_visualization_summary": true,
+    "attach_jsonld": true,
+    "include_audit_trail": true,
+    "authoring": {
+      "prepared_by": "Biuro Otwartego Dostępu",
+      "contact_email": "reports@example.gov"
     }
   },
   "admin": {
