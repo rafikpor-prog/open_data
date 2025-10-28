@@ -1,0 +1,77 @@
+# Project Memory – Open Data Plugin
+
+## File Registry
+- `README.md` – dokumentacja koncepcyjna, specyfikacja etapu 1, architektura etapu 2, konfiguracja etapu 3, kontrakty API etapu 3A, opisy modułów importu (CSV, XLSX, JSON/API, URL, DB), silnik transformacji (etap 9), warstwa metadanych (etap 10), system uprawnień i audytu (etap 11), panel administratora i integrator WordPress (etap 12) oraz moduł wizualizacji podstawowych (etap 13) z instrukcją instalacji wtyczki WordPress i pobierania repozytorium z GitHub.
+- `STAGE11_OVERVIEW.md` – streszczenie etapu 11 (uprawnienia, audyt) wraz ze wskazaniem lokalizacji wtyczki WordPress.
+- `PROJECT_MEMORY.md` – rejestr struktury projektu, interfejsów, zależności i zadań po realizacji etapów 1–13.
+- `pyproject.toml` – konfiguracja projektu Python (`ingestion_service`, `visualization_service`) z zależnościami `SQLAlchemy` (integracja bazodanowa) oraz `matplotlib` (wizualizacje) i ustawieniami pytest.
+- `config/profiles/dev.json` – profil konfiguracyjny GitOps wykorzystywany przez `config-service`, zawiera polityki CSV (`policy`), XLSX (`xlsx_policy`), JSON/API (`json_policy`), `remote_policy` (cache, harmonogram, retry dla URL), `database` (policy + connections dla baz relacyjnych), sekcję `transformation`, konfigurację `visualization` (katalog `build/visualizations`, formaty, DPI, paleta), `metadata` (storage, licencje, słowa kluczowe), `auth` (role RBAC/ABAC, polityka audytu) oraz `admin` (branding Studio Danych, menu, integracja WordPress, generator instalatora ZIP).
+- `src/ingestion_service/__init__.py` – punkt wejścia modułu importu CSV, XLSX, JSON/API, integracji bazodanowej i synchronizacji URL (eksport klas/builderów, `RemoteSyncManager`, `DatabaseIngestor`).
+- `src/ingestion_service/config_client.py` – klient `config-service` z obsługą GitOps i trybu offline.
+- `src/ingestion_service/profile.py` – modele profili (`StoragePaths`, `IngestionPolicy`, `XLSXPolicy`, `JsonPolicy`, `RemotePolicy`, `DatabasePolicy`, `DatabaseConnection`, `TransformationPolicy`, `TransformationStepConfig`, `VisualizationSettings`, `MetadataStorage`, `MetadataPolicy`, `RoleDefinition`, `AuditPolicy`, `AuthPolicy`, `ConfigProfile`).
+- `src/auth_service/__init__.py` – eksport punktów wejścia modułu uprawnień (Role, Permission, AttributeRule, AuditTrail, AuthorizationService).
+- `src/auth_service/rbac.py` – definicje RBAC/ABAC (`Permission`, `AttributeRule`, `Role`) wykorzystywane przez etap 11.
+- `src/auth_service/audit.py` – klasy audytu (`AuditRecord`, `AuditTrail`) wraz z obsługą retencji i zapisu pliku JSON.
+- `src/auth_service/service.py` – `AuthorizationService` oraz `AccessDecision` obsługujące przypisania ról, decyzje RBAC/ABAC i audyt.
+- `src/ingestion_service/contracts.py` – implementacja kontraktów API `ingestion-service` (Etap 3A) oraz raportów transformacji (Etap 9).
+- `src/ingestion_service/csv_ingestor.py` – silnik importu CSV (`CSVIngestor`, heurystyki wizualizacji, CLI).
+- `src/ingestion_service/xlsx_ingestor.py` – silnik importu XLSX (`XLSXIngestor`, autodetekcja arkuszy, CLI środowiskowe).
+- `src/ingestion_service/json_ingestor.py` – silnik importu JSON/API (`JSONIngestor`, obsługa HTTP, JSON Pointer, CLI).
+- `src/ingestion_service/remote_sync.py` – moduł synchronizacji URL (`RemoteSyncManager`, `RemoteSourceConfig`, `RemoteSyncState`, `parse_duration`).
+- `src/ingestion_service/database_ingestor.py` – silnik integracji bazodanowej (`DatabaseIngestor`, `DatabaseIngestionRequest`, generowanie landing/preview, heurystyki wizualizacji).
+- `src/ingestion_service/transformation.py` – moduł transformacji danych (`TransformationPipeline`, `TransformationStep`, `TransformationSettings`, `settings_from_profile`, narzędzia `slugify_header`, `load_rows_from_preview`).
+- `src/metadata_service/__init__.py` – punkt wejścia warstwy metadanych, eksportuje modele i rejestr wykorzystywane przez pipeline ETL oraz WordPress.
+- `src/metadata_service/models.py` – definicje `DatasetRecord`, `DistributionRecord`, `FieldSchema`, `ContactPoint` wraz z metodami serializacji zgodnych z DCAT-AP.
+- `src/metadata_service/registry.py` – implementacja `MetadataRegistry`, funkcji `record_from_transformation` oraz `registry_from_profile`; obsługuje eksport JSON-LD/JSON:API i integrację z raportami transformacji.
+- `src/admin_gateway/__init__.py` – eksport `AdminGatewayService`, `AdminGatewayError` oraz modeli panelu Studio Danych (etap 12).
+- `src/admin_gateway/models.py` – definicje `StudioSettings`, `MenuItem`, `FeatureFlags`, `WordPressSettings`, `InstallationPackage` wykorzystywane przez panel administracyjny.
+- `src/admin_gateway/service.py` – implementacja panelu Studio Danych (`AdminGatewayService`) z obsługą konfiguracji, menu, integracji WordPress i generatora instalatora ZIP.
+- `src/visualization_service/__init__.py` – publiczne API modułu wizualizacji (eksport `VisualizationService`, `VisualizationRequest`, `VisualizationProduct`, helper `build_visualization_service`).
+- `src/visualization_service/models.py` – modele `VisualizationRequest`, `VisualizationProduct` opisujące żądania i wyniki wizualizacji (etap 13).
+- `src/visualization_service/service.py` – implementacja `VisualizationService` generującego wykresy PNG/JPG/PDF z podglądów danych, wraz z helperem `build_visualization_service` (Matplotlib, etap 13).
+- `tests/test_csv_ingestor.py` – testy jednostkowe importu CSV.
+- `tests/test_xlsx_ingestor.py` – testy jednostkowe importu XLSX (generowanie arkusza, tryb GitOps).
+- `tests/test_json_ingestor.py` – testy jednostkowe importu JSON/API (plik lokalny oraz symulowane API HTTP/GitOps).
+- `tests/test_remote_sync.py` – testy jednostkowe harmonogramu URL (lokalny serwer HTTP, zapis stanu synchronizacji, obsługa skipów).
+- `tests/test_database_ingestor.py` – testy jednostkowe integracji bazodanowej (SQLite, selekcja tabeli i zapytanie custom).
+- `tests/test_transformation_pipeline.py` – testy jednostkowe pipeline'u transformacji (normalizacja, filtracja, agregacje, zapis podglądu).
+- `tests/test_metadata_registry.py` – testy jednostkowe rejestru metadanych (rejestracja z raportu transformacji, eksport JSON-LD, serializacja JSON:API, odczyt z dysku).
+- `tests/test_auth_service.py` – testy jednostkowe modułu uprawnień (RBAC, ABAC, audyt decyzji) dodanego w etapie 11.
+- `tests/test_admin_gateway.py` – testy jednostkowe panelu administracyjnego (filtrowanie menu, wymagane uprawnienia, generator paczek WordPress).
+- `tests/test_visualization_service.py` – testy jednostkowe modułu wizualizacji (generowanie plików PNG/PDF, obsługa braku danych liczbowych).
+- `tests/fixtures/sample_population.csv` – przykładowy plik CSV wykorzystywany w testach.
+- `tests/fixtures/sample_population.json` – przykładowa odpowiedź JSON wykorzystywana w testach.
+- `tests/__init__.py` – inicjalizacja pakietu testowego.
+- `wordpress/open-data-plugin/open-data-plugin.php` – pełna wtyczka WordPress integrująca się z usługami Open Data (CPT, panel Studio Danych, synchronizacja, shortcode, cache transjentów).
+
+## Interfaces
+- **Warstwa prezentacji (Studio Danych, katalog publiczny)** – planowane SPA (React/Vue) z SSR, zgodne z WCAG 2.1 AA; moduły: Panel administratora z konfiguracją globalną i integracją WordPress, Panel analityka, Katalog danych, kreator konfiguracji, kreator importu oraz widok kontraktów API z auto-generacją klienta.
+- **Warstwa usługowa (mikroserwisy)** – `admin-gateway`, `config-service`, `ingestion-service`, `etl-service`, `metadata-service`, `visualization-service`, `auth-service`; kontrakty REST/GraphQL/AsyncAPI utrzymywane w repozytorium GitOps; komunikacja JSON:API z nagłówkami wersjonowania i kolejki RabbitMQ/Kafka dla zadań ETL, konfiguracji, audytu i wizualizacji.
+- **Warstwa konfiguracji** – `config-service` z API `/config/v1`, zdarzeniami `config.updated`, `config.rollout.failed`, magazynem PostgreSQL (`config_items`, `config_versions`, `config_audit`) oraz integracją z backendem tajemnic (Vault/KMS); publikacja kontraktów wymaga podpisu wersji `config_version` oraz potwierdzenia MFA.
+- **Warstwa ingestu CSV/XLSX/JSON/URL** – moduł `ingestion_service` (`CSVIngestor`, `XLSXIngestor`, `JSONIngestor`, `RemoteSyncManager`, `ConfigServiceClient`, kontrakty `IngestionResult`) realizujący `POST /ingestion/v1/jobs`, zapis landing/preview, harmonogram `RemoteSyncManager` oraz komunikaty `ingestion.job.completed`.
+- **Warstwa integracji bazodanowej** – `DatabaseIngestor` i `DatabaseIngestionRequest` obsługujące profile `database_policy`/`database_connections`, połączenia SQLAlchemy (PostgreSQL/MySQL/MS SQL), generowanie landing/preview oraz sugestii wizualizacji dla danych z baz relacyjnych.
+- **Warstwa danych** – PostgreSQL (metadane, konfiguracje, audyt), hurtownia analityczna (ClickHouse/Snowflake opcjonalnie), storage S3 na zasoby i wizualizacje; pliki landing/preview przechowywane lokalnie (np. `build/landing`, `build/preview`).
+- **Warstwa metadanych** – `metadata_service` (`MetadataRegistry`, `DatasetRecord`, eksporty JSON-LD/JSON:API) synchronizująca raporty transformacji z katalogiem DCAT-AP, zintegrowana z WordPressem i przyszłym `metadata-service` REST/GraphQL.
+- **Integracje zewnętrzne** – konektory do dane.gov.pl (CKAN), API BDL, usług INSPIRE i eIDAS; webhooki do partnerów; integracja z GitOps dla repozytorium konfiguracji i kontraktów (`openapi.yaml`, `graphql/*.graphql`, `asyncapi.yaml`) z automatyczną walidacją.
+- **Warstwa wizualizacji** – `visualization_service` (`VisualizationService`, `VisualizationRequest`, `VisualizationProduct`) generująca wykresy PNG/JPG/PDF na podstawie podglądów danych i profilu `visualization`, obsługująca rekomendacje wykresów oraz integrację ze Studio Danych i wtyczką WordPress.
+- **Warstwa transformacji danych** – `TransformationPipeline`, raport `TransformationReport`, generowanie podglądów `*-transformed.json` oraz heurystyki wizualizacji zintegrowane z `ingestion-service`, `metadata_service` i `visualization-service`.
+- **Warstwa integracji WordPress** – gotowa wtyczka `wordpress/open-data-plugin` korzystająca z kontraktów `admin-gateway`, `auth-service`, `config-service` i eksportów `metadata_service`, publikująca katalog danych (CPT), panel Studio Danych, harmonogram `odp_sync_event`, shortcode `[open_data_dataset]`, meta pola licencji/JSON-LD oraz obsługę instalatora generowanego przez `admin_gateway`.
+- **Warstwa uprawnień i audytu** – moduł `auth_service` (`AuthorizationService`, `AuditTrail`, `Permission`, `Role`, `AttributeRule`) zapewniający RBAC/ABAC, wpisy audytu i integrację z profilami `auth` w `config-service`, wykorzystywany przez Studio Danych i mostek WordPress.
+
+## Dependency Map
+- **Backend**: Python 3.10+, standardowa biblioteka (`csv`, `json`, `urllib`, `zipfile`, `xml.etree`, `dataclasses`, `pathlib`) – implementacje ingestu CSV/XLSX/JSON/URL/transformacji/metadanych, modułu uprawnień (`auth_service`) oraz panelu administracyjnego (`admin_gateway`), framework webowy (FastAPI/Django – planowane), Pydantic/OpenAPI 3.1, **SQLAlchemy (etap 8)**, **Matplotlib (etap 13)**, narzędzia ETL (Celery/Prefect), biblioteki bezpieczeństwa (oauthlib, python-jose), klienci RabbitMQ/Kafka, SDK HashiCorp Vault/AWS/Azure do tajemnic, narzędzia generacji kontraktów (openapi-generator, graphql-codegen, asyncapi-generator).
+- **Frontend/Studio Danych**: React z TypeScript, Next.js/Nuxt SSR, biblioteki wizualizacji (D3.js, Chart.js, Leaflet), narzędzia dostępności (axe-core), system designu kompatybilny z GOV.PL, komponenty kreatora konfiguracji (wizard, formularze walidowane JSON Schema), moduł przeglądarki kontraktów (Redoc/GraphiQL/AsyncAPI viewer) oraz komponenty osadzane w WordPress (Gutenberg blocks, shortcody).
+- **WordPress bridge**: PHP 8.1+, WordPress 6.x, WP-CLI, REST API, Options API, WP Cron, shortcody, integracja z OAuth 2.0/OIDC oraz kontraktami JSON:API i eksportami JSON-LD z `metadata_service`; korzysta z paczek ZIP generowanych przez `admin_gateway`, a w kolejnych etapach planowane jest rozszerzenie o pełny autoinstalator.
+- **Dane i analityka**: pandas, openpyxl, pyarrow, Great Expectations, Apache Parquet; storage S3 (MinIO), hurtownia ClickHouse; narzędzia raportowania (WeasyPrint/ReportLab); integracja z API BDL/dane.gov.pl poprzez konektory opisane kontraktami i polityki cache.
+- **Infrastruktura**: Kubernetes/K3s, Helm, Istio/NGINX Ingress, Prometheus, Grafana, OpenTelemetry, ELK/Opensearch, Vault/Sealed Secrets, ArgoCD/Flux dla GitOps, pipeline `config-ci` (GitHub Actions/GitLab CI) rozszerzony o walidację kontraktów (Spectral, graphql-schema-linter, AsyncAPI CLI) i publikację artefaktów SDK; harmonogramy URL wykorzystują standardowe narzędzia orkiestracji (CronJob/Argo Workflows) oraz repozytorium GitOps do przechowywania stanów.
+
+## Migrations
+- Etapy 3–3A rozszerzyły schemat `config` w PostgreSQL (`config_items`, `config_versions`, `config_audit`) oraz dodały wersjonowanie kontraktów (`api_contracts`). Etapy 4–10 przygotowują wymagania dla tabel `ingestion_jobs`, `landing_files`, `preview_snapshots`, `transformation_jobs`, `transformation_logs`, `metadata_datasets`, `metadata_fields`, `metadata_distributions`, `api_sources` (parametry JSON/API), `remote_sources` (konfiguracje URL), `remote_states` (ostatnie synchronizacje), `db_sources` (definicje połączeń bazodanowych) oraz rozszerzeń `xlsx_profiles`. Etap 11 dodaje wymagania dla `auth_users`, `auth_roles`, `auth_role_assignments` oraz `audit_log_entries` (retencja, eksport do JSON-LD/JSON:API). Etap 12 wprowadza struktury `studio_settings`, `wordpress_sites`, `installer_runs` przechowujące konfigurację panelu i historię generatora paczek.
+- Plan migracji obejmuje: przygotowanie migracji baz danych dla `metadata` (rekordy DCAT-AP, historia aktualizacji), `audit_log`/`audit_log_entries`, `config`, `ingestion_jobs`, `landing_files`, `preview_snapshots`, `visualization_cache`, `api_contracts`, `api_sources`, `remote_sources`, `remote_states`, `db_sources`, `transformation_jobs`, `auth_users`, `auth_roles`, `auth_role_assignments`, a także struktur wspierających integrację WordPress (`wordpress_sites`, `installer_runs`) wraz z politykami retencji, szyfrowania i zgodności z RODO/DCAT-AP.
+
+## TODOs
+1. Rozpocząć etap 14 – rozbudować moduł wizualizacji o dashboardy, mapy (Leaflet) i eksport interaktywny wraz z konfiguracją zaawansowanych parametrów wykresów w Studio Danych.
+2. Przygotować repozytorium GitOps dla konfiguracji i kontraktów (`config-repo`) z pipeline'em `config-ci` (walidacja OpenAPI/GraphQL/AsyncAPI, publikacja SDK, walidacja metadanych JSON-LD oraz schematów ról).
+3. Zdefiniować testy integracyjne obejmujące przepływ `ingestion_service` → `TransformationPipeline` → `metadata_service` → `visualization_service` → `admin_gateway`/WordPress, aby weryfikować publikację wykresów i audyt akcji.
+4. Opracować polityki bezpieczeństwa Kubernetes (NetworkPolicies, PodSecurity, SecretStore CSI) dla `config-service`, `ingestion-service`, `metadata-service`, `visualization_service`, `auth-service`, `admin_gateway`, storage landing/preview/metadanych oraz komponentów bazodanowych.
+5. Rozszerzyć integrację WordPress o kreator autoinstalacji (WP-CLI + interfejs w Studio Danych) synchronizujący role, profile, klucze OAuth i konfigurację wizualizacji (tematy kolorystyczne, cache wykresów).

@@ -1,0 +1,11 @@
+{
+  "metadata": {
+    "source": "BDL",
+    "description": "Przykładowe dane populacyjne"
+  },
+  "results": [
+    {"rok": 2020, "populacja": 12345, "wojewodztwo": "Mazowieckie"},
+    {"rok": 2021, "populacja": 12500, "wojewodztwo": "Mazowieckie"},
+    {"rok": 2022, "populacja": 12650, "wojewodztwo": "Mazowieckie"}
+  ]
+}

@@ -1,0 +1,4 @@
+# Ignorowane pliki artefaktów runtime i katalog landing (tworzony dynamicznie)
+__pycache__/
+*.py[cod]
+build/

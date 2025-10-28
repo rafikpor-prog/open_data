@@ -1,0 +1,338 @@
+{
+  "name": "dev",
+  "description": "Profil developerski zgodny z etapami 3-13 konfiguracji",
+  "storage": {
+    "landing": "build/landing",
+    "schema_registry": "build/schemas",
+    "preview": "build/preview"
+  },
+  "policy": {
+    "allowed_separators": [
+      ",",
+      ";",
+      "\t"
+    ],
+    "default_encoding": "utf-8",
+    "max_file_size_mb": 5,
+    "sample_size": 200,
+    "timezone": "Europe/Warsaw"
+  },
+  "xlsx_policy": {
+    "allowed_extensions": [
+      ".xlsx",
+      ".xlsm"
+    ],
+    "max_file_size_mb": 10,
+    "sample_size": 150,
+    "preferred_sheets": [
+      "Dane",
+      "Sheet1",
+      "Arkusz1"
+    ],
+    "header_row_index": 1
+  },
+  "json_policy": {
+    "allowed_http_methods": [
+      "GET"
+    ],
+    "allowed_content_types": [
+      "application/json",
+      "application/vnd.api+json"
+    ],
+    "max_payload_mb": 10,
+    "max_records": 500,
+    "default_pointer": "/results",
+    "http_timeout": 15,
+    "preview_size": 20
+  },
+  "remote_policy": {
+    "allowed_schemes": [
+      "https",
+      "http"
+    ],
+    "allowed_content_types": [
+      "text/csv",
+      "application/json",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    ],
+    "max_file_size_mb": 25,
+    "download_cache": "build/cache",
+    "state_registry": "build/state",
+    "default_schedule": "PT24H",
+    "verify_tls": true,
+    "retry_attempts": 3,
+    "retry_backoff_seconds": 30
+  },
+  "database": {
+    "policy": {
+      "allowed_drivers": [
+        "postgresql",
+        "mysql",
+        "mssql",
+        "sqlite"
+      ],
+      "max_rows": 10000,
+      "default_limit": 1000,
+      "metadata_cache": "build/db-metadata",
+      "timezone": "Europe/Warsaw"
+    },
+    "connections": {
+      "demo_postgres": {
+        "url": "postgresql+psycopg2://demo:demo@localhost:5432/opendata",
+        "driver": "postgresql",
+        "default_schema": "public",
+        "description": "Lokalna baza demonstracyjna PostgreSQL zgodna z API BDL",
+        "options": {
+          "connect_args": {
+            "sslmode": "prefer"
+          },
+          "pool_pre_ping": true
+        }
+      }
+    }
+  },
+  "transformation": {
+    "policy": {
+      "enabled": true,
+      "max_rows": 5000,
+      "rounding_precision": 2,
+      "allowed_operations": [
+        "normalize_headers",
+        "rename_columns",
+        "filter_rows",
+        "derive_column",
+        "aggregate"
+      ]
+    },
+    "steps": [
+      {
+        "operation": "normalize_headers",
+        "parameters": {}
+      },
+      {
+        "operation": "rename_columns",
+        "parameters": {
+          "mapping": {
+            "rok": "year",
+            "populacja": "population",
+            "wojewodztwo": "region"
+          }
+        }
+      },
+      {
+        "operation": "filter_rows",
+        "parameters": {
+          "conditions": [
+            {
+              "field": "year",
+              "operator": ">=",
+              "value": 2021
+            }
+          ]
+        }
+      },
+      {
+        "operation": "derive_column",
+        "parameters": {
+          "name": "population_thousands",
+          "expression": "population / 1000"
+        }
+      },
+      {
+        "operation": "aggregate",
+        "parameters": {
+          "group_by": [
+            "region"
+          ],
+          "metrics": [
+            {
+              "field": "population",
+              "function": "sum",
+              "alias": "population_sum"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "visualization": {
+    "output_dir": "build/visualizations",
+    "default_formats": [
+      "png",
+      "pdf"
+    ],
+    "default_chart_types": [
+      "line",
+      "bar",
+      "area"
+    ],
+    "figure_size": [
+      10,
+      6
+    ],
+    "dpi": 150,
+    "color_palette": [
+      "#0A6FB4",
+      "#59B4D1",
+      "#F2A007",
+      "#C0392B"
+    ],
+    "background_color": "#FFFFFF",
+    "max_series": 4,
+    "title_prefix": "Wizualizacja"
+  },
+  "metadata": {
+    "storage": {
+      "registry": "build/metadata/registry",
+      "exports": "build/metadata/exports"
+    },
+    "policy": {
+      "default_license": "CC BY 4.0",
+      "default_publisher": "Miasto Demo / Biuro Otwartego Dostępu",
+      "default_contact": {
+        "name": "Zespół Open Data",
+        "email": "opendata@example.gov"
+      },
+      "default_accrual_periodicity": "P1M",
+      "default_spatial": "PL",
+      "default_language": "pl",
+      "keyword_strategy": [
+        "dane publiczne",
+        "demo",
+        "populacja"
+      ],
+      "theme_taxonomy": [
+        "DEMOGRAFIA",
+        "REGION"
+      ],
+      "auto_publish_jsonld": true,
+      "default_temporal_start": "2020-01-01",
+      "default_temporal_end": null
+    }
+  },
+  "admin": {
+    "studio": {
+      "default_profile": "dev",
+      "allowed_profiles": [
+        "dev"
+      ],
+      "feature_flags": {
+        "ingestion": true,
+        "transformation": true,
+        "metadata": true,
+        "wordpress": true,
+        "quality": false
+      },
+      "branding": {
+        "logo_url": "https://example.gov/assets/logo-open-data.svg",
+        "support_email": "support@example.gov",
+        "announcement": "Środowisko demonstracyjne – dane testowe."
+      },
+      "menu": [
+        {
+          "id": "dashboard",
+          "label": "Pulpit",
+          "route": "/studio/dashboard",
+          "permissions": [
+            "studio.dashboard.view"
+          ]
+        },
+        {
+          "id": "settings",
+          "label": "Ustawienia globalne",
+          "route": "/studio/settings",
+          "permissions": [
+            "studio.settings.view"
+          ]
+        },
+        {
+          "id": "wordpress",
+          "label": "Integracja WordPress",
+          "route": "/studio/wordpress",
+          "permissions": [
+            "wordpress.integrations.manage"
+          ]
+        }
+      ]
+    },
+    "wordpress": {
+      "enabled": true,
+      "auto_sync_interval": "PT12H",
+      "installer": {
+        "bundle_directory": "build/installers",
+        "package_name": "open-data-plugin.zip"
+      }
+    }
+  },
+  "auth": {
+    "roles": {
+      "data_viewer": {
+        "permissions": [
+          "datasets.view",
+          "studio.dashboard.view"
+        ],
+        "description": "Analityk z dostępem tylko do podglądu",
+        "attribute_rules": [],
+        "inherits": []
+      },
+      "data_admin": {
+        "permissions": [
+          "datasets.view",
+          "datasets.publish",
+          "metadata.manage"
+        ],
+        "description": "Administrator danych publicznych",
+        "attribute_rules": [
+          {
+            "attribute": "classification",
+            "allowed": [
+              "public"
+            ],
+            "required": true,
+            "conditions": {
+              "environment": "prod"
+            }
+          }
+        ],
+        "inherits": [
+          "data_viewer"
+        ]
+      },
+      "studio_admin": {
+        "permissions": [
+          "studio.dashboard.view",
+          "studio.settings.view",
+          "studio.settings.update",
+          "wordpress.integrations.manage",
+          "wordpress.sync.trigger",
+          "wordpress.installers.generate"
+        ],
+        "description": "Administrator panelu Studio Danych i integracji WordPress",
+        "attribute_rules": [],
+        "inherits": [
+          "data_viewer"
+        ]
+      },
+      "security_auditor": {
+        "permissions": [
+          "audit.read",
+          "audit.export",
+          "studio.settings.view",
+          "wordpress.sync.trigger"
+        ],
+        "description": "Audytor bezpieczeństwa",
+        "attribute_rules": [],
+        "inherits": []
+      }
+    },
+    "default_roles": [
+      "data_viewer"
+    ],
+    "audit": {
+      "storage_path": "build/audit/audit-log.json",
+      "retention": 2000,
+      "notify_on_deny": true
+    }
+  },
+  "strict_schema": false
+}
