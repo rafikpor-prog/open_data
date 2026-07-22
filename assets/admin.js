@@ -1,0 +1,6 @@
+(function($){
+'use strict';
+$('.ptr14-toggle-secret').on('click',function(){var target=document.getElementById($(this).data('target'));if(!target)return;target.type=target.type==='password'?'text':'password';$(this).text(target.type==='password'?'Pokaż':'Ukryj');});
+$('.ptr14-clear-cache').on('click',function(){var button=$(this).prop('disabled',true);var output=$('.ptr14-cache-result').text('Czyszczenie…');$.post(PTR14Admin.ajaxUrl,{action:'ptr_stage14_clear_cache',nonce:PTR14Admin.nonce}).done(function(response){output.text(response.data&&response.data.message?response.data.message:'Gotowe.');}).fail(function(){output.text('Nie udało się wyczyścić cache.');}).always(function(){button.prop('disabled',false);});});
+$('.ptr14-test-maps').on('click',function(){var button=$(this).prop('disabled',true);var output=$('.ptr14-test-result').removeClass('is-ok is-error').text('Sprawdzanie…');$.post(PTR14Admin.ajaxUrl,{action:'ptr_stage14_test_maps',nonce:PTR14Admin.nonce,key:$('#ptr14-key').val(),map_id:$('#ptr14-map-id').val()}).done(function(response){output.addClass(response.success?'is-ok':'is-error').text(response.data&&response.data.message?response.data.message:'Brak odpowiedzi.');}).fail(function(){output.addClass('is-error').text('Nie udało się wykonać testu.');}).always(function(){button.prop('disabled',false);});});
+})(jQuery);
