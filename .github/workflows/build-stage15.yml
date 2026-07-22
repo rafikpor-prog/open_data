@@ -1,0 +1,820 @@
+name: Build Przemysl Tour Stage 15
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-stage15.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          tools: none
+          coverage: none
+
+      - name: Download exact 1.4.0 package
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 --retry-delay 2 \
+            'https://at.adobe.com/9iPpyw0QofJmgqqz' \
+            -o /tmp/przemysl-tour-races-1.4.0.zip
+          unzip -t /tmp/przemysl-tour-races-1.4.0.zip
+
+      - name: Prepare complete source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf work dist
+          mkdir -p work/base dist
+          unzip -q /tmp/przemysl-tour-races-1.4.0.zip -d work/base
+          MAIN_FILE="$(find work/base -type f -name 'przemysl-tour-races.php' | head -n 1)"
+          test -n "$MAIN_FILE"
+          SOURCE_ROOT="$(dirname "$MAIN_FILE")"
+          mkdir -p work/build/przemysl-tour-races
+          cp -a "$SOURCE_ROOT"/. work/build/przemysl-tour-races/
+          test -f work/build/przemysl-tour-races/przemysl-tour-races.php
+          find work/build/przemysl-tour-races -type f | sort > work/files-before.txt
+
+      - name: Add Stage 15 production readiness module
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p work/build/przemysl-tour-races/includes
+          mkdir -p work/build/przemysl-tour-races/assets/css
+          mkdir -p work/build/przemysl-tour-races/assets/js
+          mkdir -p work/build/przemysl-tour-races/docs
+
+          cat > work/build/przemysl-tour-races/includes/class-ptr-production-readiness.php <<'PHP'
+          <?php
+          /**
+           * Etap 15: gotowosc produkcyjna, audyt i dokumentacja operacyjna.
+           *
+           * @package PrzemyslTourRaces
+           */
+
+          if ( ! defined( 'ABSPATH' ) ) {
+              exit;
+          }
+
+          final class PTR_Production_Readiness {
+              const VERSION         = '1.5.0';
+              const OPTION          = 'ptr_production_readiness';
+              const SNAPSHOT_OPTION = 'ptr_production_readiness_snapshot';
+              const NONCE_ACTION    = 'ptr_production_readiness_action';
+
+              private static $instance = null;
+
+              public static function instance() {
+                  if ( null === self::$instance ) {
+                      self::$instance = new self();
+                  }
+                  return self::$instance;
+              }
+
+              private function __construct() {
+                  add_action( 'admin_menu', array( $this, 'register_menu' ), 999 );
+                  add_action( 'admin_init', array( $this, 'register_settings' ) );
+                  add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_admin_assets' ) );
+                  add_action( 'wp_ajax_ptr_stage15_run_audit', array( $this, 'ajax_run_audit' ) );
+                  add_action( 'wp_ajax_ptr_stage15_clear_cache', array( $this, 'ajax_clear_cache' ) );
+                  add_action( 'admin_post_ptr_stage15_export', array( $this, 'export_diagnostics' ) );
+                  add_action( 'wp_dashboard_setup', array( $this, 'register_dashboard_widget' ) );
+                  add_filter( 'site_status_tests', array( $this, 'register_site_health_test' ) );
+                  add_action( 'rest_api_init', array( $this, 'register_rest_route' ) );
+              }
+
+              public static function defaults() {
+                  return array(
+                      'production_approved' => 0,
+                      'approved_by'         => 0,
+                      'approved_at'         => '',
+                      'checklist'           => array(),
+                      'notes'               => '',
+                  );
+              }
+
+              public function settings() {
+                  return wp_parse_args( (array) get_option( self::OPTION, array() ), self::defaults() );
+              }
+
+              public function register_settings() {
+                  register_setting(
+                      'ptr_stage15_group',
+                      self::OPTION,
+                      array(
+                          'type'              => 'array',
+                          'sanitize_callback' => array( $this, 'sanitize_settings' ),
+                          'default'           => self::defaults(),
+                      )
+                  );
+              }
+
+              public function sanitize_settings( $input ) {
+                  $old = $this->settings();
+                  $out = self::defaults();
+                  $allowed = array_keys( $this->deployment_checklist() );
+                  $incoming = isset( $input['checklist'] ) && is_array( $input['checklist'] ) ? $input['checklist'] : array();
+                  foreach ( $allowed as $key ) {
+                      $out['checklist'][ $key ] = empty( $incoming[ $key ] ) ? 0 : 1;
+                  }
+                  $out['production_approved'] = empty( $input['production_approved'] ) ? 0 : 1;
+                  $out['notes'] = isset( $input['notes'] ) ? sanitize_textarea_field( $input['notes'] ) : '';
+                  if ( $out['production_approved'] && empty( $old['production_approved'] ) ) {
+                      $out['approved_by'] = get_current_user_id();
+                      $out['approved_at'] = current_time( 'mysql' );
+                  } elseif ( $out['production_approved'] ) {
+                      $out['approved_by'] = isset( $old['approved_by'] ) ? absint( $old['approved_by'] ) : get_current_user_id();
+                      $out['approved_at'] = isset( $old['approved_at'] ) ? sanitize_text_field( $old['approved_at'] ) : current_time( 'mysql' );
+                  }
+                  delete_option( self::SNAPSHOT_OPTION );
+                  return $out;
+              }
+
+              private function find_parent_slug() {
+                  global $menu;
+                  foreach ( (array) $menu as $entry ) {
+                      $label = isset( $entry[0] ) ? wp_strip_all_tags( $entry[0] ) : '';
+                      $slug  = isset( $entry[2] ) ? (string) $entry[2] : '';
+                      if ( false !== stripos( $label, 'Przemyśl Tour' ) || false !== stripos( $label, 'Przemysl Tour' ) ) {
+                          return $slug;
+                      }
+                  }
+                  return '';
+              }
+
+              public function register_menu() {
+                  $parent = $this->find_parent_slug();
+                  if ( $parent ) {
+                      add_submenu_page(
+                          $parent,
+                          'Wydanie produkcyjne',
+                          'Wydanie produkcyjne',
+                          'manage_options',
+                          'ptr-production-readiness',
+                          array( $this, 'render_page' )
+                      );
+                  } else {
+                      add_management_page(
+                          'Przemyśl Tour – wydanie produkcyjne',
+                          'Przemyśl Tour – produkcja',
+                          'manage_options',
+                          'ptr-production-readiness',
+                          array( $this, 'render_page' )
+                      );
+                  }
+              }
+
+              public function enqueue_admin_assets( $hook ) {
+                  if ( false === strpos( (string) $hook, 'ptr-production-readiness' ) ) {
+                      return;
+                  }
+                  $base_url = defined( 'PTR_PLUGIN_URL' ) ? PTR_PLUGIN_URL : plugin_dir_url( dirname( __DIR__ ) . '/przemysl-tour-races.php' );
+                  wp_enqueue_style( 'ptr-stage15-admin', $base_url . 'assets/css/production-readiness.css', array(), self::VERSION );
+                  wp_enqueue_script( 'ptr-stage15-admin', $base_url . 'assets/js/production-readiness.js', array( 'jquery' ), self::VERSION, true );
+                  wp_localize_script(
+                      'ptr-stage15-admin',
+                      'PTRStage15',
+                      array(
+                          'ajaxUrl' => admin_url( 'admin-ajax.php' ),
+                          'nonce'   => wp_create_nonce( self::NONCE_ACTION ),
+                          'running' => 'Trwa wykonywanie audytu…',
+                          'error'   => 'Nie udało się wykonać operacji.',
+                      )
+                  );
+              }
+
+              private function memory_to_bytes( $value ) {
+                  $value = trim( (string) $value );
+                  if ( '' === $value || '-1' === $value ) {
+                      return PHP_INT_MAX;
+                  }
+                  $unit = strtolower( substr( $value, -1 ) );
+                  $number = (float) $value;
+                  if ( 'g' === $unit ) {
+                      $number *= 1024;
+                  }
+                  if ( in_array( $unit, array( 'g', 'm' ), true ) ) {
+                      $number *= 1024;
+                  }
+                  if ( in_array( $unit, array( 'g', 'm', 'k' ), true ) ) {
+                      $number *= 1024;
+                  }
+                  return (int) $number;
+              }
+
+              private function table_exists( $table ) {
+                  global $wpdb;
+                  return $table === $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $table ) ) );
+              }
+
+              private function maps_key_exists() {
+                  $settings = get_option( 'ptr_settings', array() );
+                  if ( ! is_array( $settings ) ) {
+                      return false;
+                  }
+                  foreach ( array( 'google_maps_api_key', 'maps_api_key', 'google_api_key' ) as $key ) {
+                      if ( ! empty( $settings[ $key ] ) ) {
+                          return true;
+                      }
+                  }
+                  return false;
+              }
+
+              private function required_files() {
+                  $root = dirname( __DIR__ );
+                  return array(
+                      $root . '/przemysl-tour-races.php',
+                      $root . '/includes/class-ptr-production-readiness.php',
+                      $root . '/assets/css/production-readiness.css',
+                      $root . '/assets/js/production-readiness.js',
+                      $root . '/docs/WDROZENIE-PRODUKCYJNE.md',
+                      $root . '/docs/ADMINISTRATOR.md',
+                  );
+              }
+
+              private function add_check( &$checks, $id, $label, $status, $message, $critical, $group ) {
+                  $checks[ $id ] = array(
+                      'id'       => $id,
+                      'label'    => $label,
+                      'status'   => $status,
+                      'message'  => $message,
+                      'critical' => (bool) $critical,
+                      'group'    => $group,
+                  );
+              }
+
+              public function run_checks( $force = false ) {
+                  if ( ! $force ) {
+                      $snapshot = get_option( self::SNAPSHOT_OPTION, array() );
+                      if ( is_array( $snapshot ) && ! empty( $snapshot['generated_gmt'] ) && strtotime( $snapshot['generated_gmt'] ) > time() - 15 * MINUTE_IN_SECONDS ) {
+                          return $snapshot;
+                      }
+                  }
+
+                  global $wpdb;
+                  $checks = array();
+                  $wp_version = get_bloginfo( 'version' );
+                  $php_ok = version_compare( PHP_VERSION, '7.4', '>=' );
+                  $wp_ok = version_compare( $wp_version, '6.0', '>=' );
+                  $this->add_check( $checks, 'php', 'Wersja PHP', $php_ok ? 'good' : 'critical', 'PHP ' . PHP_VERSION . '; wymagane co najmniej 7.4.', true, 'Środowisko' );
+                  $this->add_check( $checks, 'wordpress', 'Wersja WordPress', $wp_ok ? 'good' : 'critical', 'WordPress ' . $wp_version . '; wymagane co najmniej 6.0.', true, 'Środowisko' );
+
+                  $plugin_version = defined( 'PTR_VERSION' ) ? PTR_VERSION : 'nieustalona';
+                  $version_ok = defined( 'PTR_VERSION' ) && version_compare( PTR_VERSION, '1.5.0', '>=' );
+                  $this->add_check( $checks, 'plugin_version', 'Wersja wtyczki', $version_ok ? 'good' : 'critical', 'Wykryta wersja: ' . $plugin_version . '.', true, 'Wydanie' );
+
+                  $db_version = defined( 'PTR_DB_VERSION' ) ? PTR_DB_VERSION : get_option( 'ptr_db_version', 'nieustalona' );
+                  $db_ok = 'nieustalona' !== $db_version && version_compare( (string) $db_version, '2.3.0', '>=' );
+                  $this->add_check( $checks, 'db_version', 'Wersja modelu danych', $db_ok ? 'good' : 'warning', 'Wykryta wersja danych: ' . $db_version . '.', false, 'Wydanie' );
+
+                  $https = is_ssl() || 0 === strpos( home_url( '/' ), 'https://' );
+                  $this->add_check( $checks, 'https', 'HTTPS', $https ? 'good' : 'critical', $https ? 'Serwis korzysta z HTTPS.' : 'Adres serwisu nie korzysta z HTTPS.', true, 'Bezpieczeństwo' );
+
+                  $debug = defined( 'WP_DEBUG' ) && WP_DEBUG;
+                  $this->add_check( $checks, 'debug', 'Tryb debugowania', $debug ? 'warning' : 'good', $debug ? 'WP_DEBUG jest włączony. Na produkcji wyłącz wyświetlanie błędów.' : 'WP_DEBUG jest wyłączony.', false, 'Bezpieczeństwo' );
+
+                  $display_errors = (bool) ini_get( 'display_errors' );
+                  $this->add_check( $checks, 'display_errors', 'Wyświetlanie błędów PHP', $display_errors ? 'warning' : 'good', $display_errors ? 'display_errors jest włączone.' : 'Błędy PHP nie są wyświetlane użytkownikom.', false, 'Bezpieczeństwo' );
+
+                  $permalinks = (string) get_option( 'permalink_structure', '' );
+                  $this->add_check( $checks, 'permalinks', 'Bezpośrednie odnośniki', $permalinks ? 'good' : 'warning', $permalinks ? 'Struktura adresów jest skonfigurowana.' : 'Używana jest domyślna struktura zapytań.', false, 'WordPress' );
+
+                  $cron_ok = ! ( defined( 'DISABLE_WP_CRON' ) && DISABLE_WP_CRON );
+                  $this->add_check( $checks, 'cron', 'WP-Cron', $cron_ok ? 'good' : 'warning', $cron_ok ? 'Wbudowany WP-Cron nie jest wyłączony.' : 'WP-Cron jest wyłączony; wymagany jest cron systemowy.', false, 'WordPress' );
+
+                  $rest_ok = function_exists( 'rest_get_server' );
+                  $this->add_check( $checks, 'rest', 'REST API', $rest_ok ? 'good' : 'critical', $rest_ok ? 'REST API jest dostępne.' : 'Nie wykryto serwera REST API.', true, 'WordPress' );
+
+                  $upload = wp_upload_dir();
+                  $upload_ok = empty( $upload['error'] ) && ! empty( $upload['basedir'] ) && is_dir( $upload['basedir'] ) && wp_is_writable( $upload['basedir'] );
+                  $this->add_check( $checks, 'uploads', 'Katalog uploads', $upload_ok ? 'good' : 'critical', $upload_ok ? 'Katalog mediów jest zapisywalny.' : 'Katalog mediów nie jest zapisywalny.', true, 'Środowisko' );
+
+                  $memory = ini_get( 'memory_limit' );
+                  $memory_bytes = $this->memory_to_bytes( $memory );
+                  $memory_status = $memory_bytes >= 256 * MB_IN_BYTES ? 'good' : ( $memory_bytes >= 128 * MB_IN_BYTES ? 'warning' : 'critical' );
+                  $this->add_check( $checks, 'memory', 'Limit pamięci PHP', $memory_status, 'Ustawiony limit: ' . $memory . '; zalecane minimum 256M.', 'critical' === $memory_status, 'Środowisko' );
+
+                  $simplexml = extension_loaded( 'simplexml' );
+                  $this->add_check( $checks, 'simplexml', 'Rozszerzenie SimpleXML', $simplexml ? 'good' : 'critical', $simplexml ? 'SimpleXML jest dostępne.' : 'Brak SimpleXML; import GPX/XLSX może nie działać.', true, 'Środowisko' );
+
+                  $reg_table = $wpdb->prefix . 'ptr_registrations';
+                  $results_table = $wpdb->prefix . 'ptr_results';
+                  $this->add_check( $checks, 'registrations_table', 'Tabela uczestników', $this->table_exists( $reg_table ) ? 'good' : 'critical', $this->table_exists( $reg_table ) ? 'Tabela uczestników istnieje.' : 'Brak tabeli uczestników.', true, 'Dane' );
+                  $this->add_check( $checks, 'results_table', 'Tabela wyników', $this->table_exists( $results_table ) ? 'good' : 'critical', $this->table_exists( $results_table ) ? 'Tabela wyników istnieje.' : 'Brak tabeli wyników.', true, 'Dane' );
+
+                  $maps = $this->maps_key_exists();
+                  $this->add_check( $checks, 'maps', 'Google Maps API', $maps ? 'good' : 'warning', $maps ? 'Klucz Google Maps został zapisany.' : 'Nie wykryto klucza Google Maps API.', false, 'Integracje' );
+
+                  $files_ok = true;
+                  $missing_files = array();
+                  foreach ( $this->required_files() as $file ) {
+                      if ( ! is_readable( $file ) ) {
+                          $files_ok = false;
+                          $missing_files[] = basename( $file );
+                      }
+                  }
+                  $this->add_check( $checks, 'files', 'Integralność plików wydania', $files_ok ? 'good' : 'critical', $files_ok ? 'Wymagane pliki wydania są dostępne.' : 'Brakuje: ' . implode( ', ', $missing_files ) . '.', true, 'Wydanie' );
+
+                  $settings = $this->settings();
+                  $checklist = $this->deployment_checklist();
+                  $completed = 0;
+                  foreach ( $checklist as $key => $label ) {
+                      if ( ! empty( $settings['checklist'][ $key ] ) ) {
+                          $completed++;
+                      }
+                  }
+                  $checklist_status = $completed === count( $checklist ) ? 'good' : 'warning';
+                  $this->add_check( $checks, 'deployment_checklist', 'Lista wdrożeniowa', $checklist_status, sprintf( 'Potwierdzono %d z %d czynności.', $completed, count( $checklist ) ), false, 'Wdrożenie' );
+
+                  $critical = 0;
+                  $warning = 0;
+                  $good = 0;
+                  foreach ( $checks as $check ) {
+                      if ( 'critical' === $check['status'] ) {
+                          $critical++;
+                      } elseif ( 'warning' === $check['status'] ) {
+                          $warning++;
+                      } else {
+                          $good++;
+                      }
+                  }
+                  $total = max( 1, count( $checks ) );
+                  $score = (int) round( 100 * ( $good + 0.5 * $warning ) / $total );
+                  $overall = $critical > 0 ? 'critical' : ( $warning > 0 ? 'warning' : 'good' );
+                  $snapshot = array(
+                      'generated'     => current_time( 'mysql' ),
+                      'generated_gmt' => gmdate( 'Y-m-d H:i:s' ),
+                      'score'         => $score,
+                      'overall'       => $overall,
+                      'summary'       => array( 'good' => $good, 'warning' => $warning, 'critical' => $critical ),
+                      'checks'        => $checks,
+                  );
+                  update_option( self::SNAPSHOT_OPTION, $snapshot, false );
+                  return $snapshot;
+              }
+
+              public function deployment_checklist() {
+                  return array(
+                      'backup'        => 'Wykonano pełną kopię plików i bazy danych.',
+                      'staging'       => 'Aktualizację sprawdzono na kopii stagingowej.',
+                      'forms'         => 'Przetestowano zapisy, wiadomości e-mail i link zarządzania zgłoszeniem.',
+                      'payments'      => 'Sprawdzono konfigurację płatności lub tryb bez opłat.',
+                      'maps'          => 'Zweryfikowano mapy, profil wysokościowy i ograniczenia klucza Google.',
+                      'results'       => 'Wykonano próbny import wyników i sprawdzono klasyfikacje.',
+                      'privacy'       => 'Zatwierdzono regulamin, zgody, politykę prywatności i retencję danych.',
+                      'accessibility' => 'Sprawdzono klawiaturę, fokus, kontrast i widok mobilny.',
+                      'seo'           => 'Sprawdzono canonical, Schema.org, mapy XML oraz indeksowanie.',
+                      'cron'          => 'Potwierdzono działanie WP-Cron lub crona systemowego.',
+                      'monitoring'    => 'Ustalono procedurę monitorowania błędów i kopii zapasowych.',
+                      'rollback'      => 'Przygotowano plan powrotu do wersji 1.4.0.',
+                  );
+              }
+
+              private function status_label( $status ) {
+                  $labels = array( 'good' => 'Poprawnie', 'warning' => 'Zalecenie', 'critical' => 'Błąd krytyczny' );
+                  return isset( $labels[ $status ] ) ? $labels[ $status ] : $status;
+              }
+
+              public function render_page() {
+                  if ( ! current_user_can( 'manage_options' ) ) {
+                      wp_die( esc_html__( 'Brak uprawnień.', 'przemysl-tour-races' ) );
+                  }
+                  $snapshot = $this->run_checks();
+                  $settings = $this->settings();
+                  ?>
+                  <div class="wrap ptr-stage15-wrap">
+                      <div class="ptr-stage15-header">
+                          <div>
+                              <h1>Przemyśl Tour – wydanie produkcyjne 1.5.0</h1>
+                              <p>Końcowy audyt bezpieczeństwa, zgodności i gotowości do uruchomienia serwisu produkcyjnego.</p>
+                          </div>
+                          <div class="ptr-stage15-actions">
+                              <button type="button" class="button button-primary ptr-stage15-run-audit">Uruchom pełny audyt</button>
+                              <a class="button" href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=ptr_stage15_export' ), self::NONCE_ACTION ) ); ?>">Pobierz diagnostykę JSON</a>
+                          </div>
+                      </div>
+
+                      <div class="ptr-stage15-score ptr-stage15-status-<?php echo esc_attr( $snapshot['overall'] ); ?>">
+                          <div class="ptr-stage15-score-number"><strong><?php echo esc_html( $snapshot['score'] ); ?>%</strong><span>gotowości</span></div>
+                          <div><h2><?php echo esc_html( $this->status_label( $snapshot['overall'] ) ); ?></h2><p>Poprawnie: <?php echo esc_html( $snapshot['summary']['good'] ); ?> · Zalecenia: <?php echo esc_html( $snapshot['summary']['warning'] ); ?> · Krytyczne: <?php echo esc_html( $snapshot['summary']['critical'] ); ?></p><p>Ostatni audyt: <?php echo esc_html( $snapshot['generated'] ); ?></p></div>
+                      </div>
+
+                      <div class="ptr-stage15-live screen-reader-text" aria-live="polite"></div>
+
+                      <?php
+                      $groups = array();
+                      foreach ( $snapshot['checks'] as $check ) {
+                          if ( ! isset( $groups[ $check['group'] ] ) ) {
+                              $groups[ $check['group'] ] = array();
+                          }
+                          $groups[ $check['group'] ][] = $check;
+                      }
+                      foreach ( $groups as $group => $checks ) :
+                          ?>
+                          <section class="ptr-stage15-panel">
+                              <h2><?php echo esc_html( $group ); ?></h2>
+                              <div class="ptr-stage15-checks">
+                                  <?php foreach ( $checks as $check ) : ?>
+                                      <article class="ptr-stage15-check ptr-stage15-status-<?php echo esc_attr( $check['status'] ); ?>">
+                                          <span class="dashicons <?php echo 'good' === $check['status'] ? 'dashicons-yes-alt' : 'dashicons-warning'; ?>" aria-hidden="true"></span>
+                                          <div><h3><?php echo esc_html( $check['label'] ); ?></h3><p><?php echo esc_html( $check['message'] ); ?></p><span><?php echo esc_html( $this->status_label( $check['status'] ) ); ?></span></div>
+                                      </article>
+                                  <?php endforeach; ?>
+                              </div>
+                          </section>
+                      <?php endforeach; ?>
+
+                      <form method="post" action="options.php" class="ptr-stage15-panel">
+                          <?php settings_fields( 'ptr_stage15_group' ); ?>
+                          <h2>Lista wdrożeniowa</h2>
+                          <p>Potwierdź czynności wykonane na kopii serwisu i w środowisku produkcyjnym.</p>
+                          <div class="ptr-stage15-deployment-list">
+                              <?php foreach ( $this->deployment_checklist() as $key => $label ) : ?>
+                                  <label><input type="checkbox" name="<?php echo esc_attr( self::OPTION ); ?>[checklist][<?php echo esc_attr( $key ); ?>]" value="1" <?php checked( ! empty( $settings['checklist'][ $key ] ) ); ?>> <span><?php echo esc_html( $label ); ?></span></label>
+                              <?php endforeach; ?>
+                          </div>
+                          <p><label for="ptr-stage15-notes"><strong>Notatki wdrożeniowe</strong></label><br><textarea id="ptr-stage15-notes" name="<?php echo esc_attr( self::OPTION ); ?>[notes]" rows="5" class="large-text"><?php echo esc_textarea( $settings['notes'] ); ?></textarea></p>
+                          <label class="ptr-stage15-approval"><input type="checkbox" name="<?php echo esc_attr( self::OPTION ); ?>[production_approved]" value="1" <?php checked( ! empty( $settings['production_approved'] ) ); ?>> <span>Potwierdzam świadome zatwierdzenie konfiguracji do pracy produkcyjnej.</span></label>
+                          <?php if ( ! empty( $settings['approved_at'] ) ) : ?><p class="description">Ostatnie zatwierdzenie: <?php echo esc_html( $settings['approved_at'] ); ?>.</p><?php endif; ?>
+                          <?php submit_button( 'Zapisz listę wdrożeniową' ); ?>
+                      </form>
+
+                      <section class="ptr-stage15-panel">
+                          <h2>Narzędzia końcowe</h2>
+                          <p><button type="button" class="button ptr-stage15-clear-cache">Wyczyść cache Przemyśl Tour</button> <a class="button" href="<?php echo esc_url( admin_url( 'site-health.php' ) ); ?>">Otwórz Stan witryny</a></p>
+                          <p class="ptr-stage15-tool-result" aria-live="polite"></p>
+                          <p>Dokumentacja znajduje się w katalogu <code>docs/</code> paczki wtyczki: <code>ADMINISTRATOR.md</code>, <code>WDROZENIE-PRODUKCYJNE.md</code> i <code>TESTY-ETAP-15.md</code>.</p>
+                      </section>
+                  </div>
+                  <?php
+              }
+
+              public function ajax_run_audit() {
+                  check_ajax_referer( self::NONCE_ACTION, 'nonce' );
+                  if ( ! current_user_can( 'manage_options' ) ) {
+                      wp_send_json_error( array( 'message' => 'Brak uprawnień.' ), 403 );
+                  }
+                  $snapshot = $this->run_checks( true );
+                  wp_send_json_success( array( 'message' => 'Audyt zakończony.', 'snapshot' => $snapshot ) );
+              }
+
+              public function ajax_clear_cache() {
+                  check_ajax_referer( self::NONCE_ACTION, 'nonce' );
+                  if ( ! current_user_can( 'manage_options' ) ) {
+                      wp_send_json_error( array( 'message' => 'Brak uprawnień.' ), 403 );
+                  }
+                  global $wpdb;
+                  $like_a = $wpdb->esc_like( '_transient_ptr_' ) . '%';
+                  $like_b = $wpdb->esc_like( '_transient_timeout_ptr_' ) . '%';
+                  $deleted = (int) $wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name LIKE %s OR option_name LIKE %s", $like_a, $like_b ) );
+                  delete_option( self::SNAPSHOT_OPTION );
+                  wp_send_json_success( array( 'message' => sprintf( 'Usunięto %d wpisów cache.', max( 0, $deleted ) ) ) );
+              }
+
+              public function export_diagnostics() {
+                  if ( ! current_user_can( 'manage_options' ) ) {
+                      wp_die( 'Brak uprawnień.' );
+                  }
+                  check_admin_referer( self::NONCE_ACTION );
+                  $snapshot = $this->run_checks( true );
+                  $payload = array(
+                      'generatedAt' => gmdate( 'c' ),
+                      'site' => array(
+                          'url'       => home_url( '/' ),
+                          'locale'    => get_locale(),
+                          'multisite' => is_multisite(),
+                      ),
+                      'versions' => array(
+                          'plugin'    => defined( 'PTR_VERSION' ) ? PTR_VERSION : null,
+                          'database'  => defined( 'PTR_DB_VERSION' ) ? PTR_DB_VERSION : get_option( 'ptr_db_version' ),
+                          'wordpress' => get_bloginfo( 'version' ),
+                          'php'       => PHP_VERSION,
+                      ),
+                      'readiness' => $snapshot,
+                  );
+                  nocache_headers();
+                  header( 'Content-Type: application/json; charset=utf-8' );
+                  header( 'Content-Disposition: attachment; filename=przemysl-tour-diagnostyka-' . gmdate( 'Y-m-d-His' ) . '.json' );
+                  echo wp_json_encode( $payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES );
+                  exit;
+              }
+
+              public function register_dashboard_widget() {
+                  if ( current_user_can( 'manage_options' ) ) {
+                      wp_add_dashboard_widget( 'ptr_production_readiness_widget', 'Przemyśl Tour – gotowość produkcyjna', array( $this, 'render_dashboard_widget' ) );
+                  }
+              }
+
+              public function render_dashboard_widget() {
+                  $snapshot = $this->run_checks();
+                  echo '<p><strong>' . esc_html( $snapshot['score'] ) . '% gotowości</strong></p>';
+                  echo '<p>Poprawnie: ' . esc_html( $snapshot['summary']['good'] ) . ' · Zalecenia: ' . esc_html( $snapshot['summary']['warning'] ) . ' · Krytyczne: ' . esc_html( $snapshot['summary']['critical'] ) . '</p>';
+                  echo '<p><a class="button" href="' . esc_url( admin_url( 'admin.php?page=ptr-production-readiness' ) ) . '">Otwórz audyt</a></p>';
+              }
+
+              public function register_site_health_test( $tests ) {
+                  $tests['direct']['ptr_production_readiness'] = array(
+                      'label' => 'Przemyśl Tour: gotowość produkcyjna',
+                      'test'  => array( $this, 'site_health_test' ),
+                  );
+                  return $tests;
+              }
+
+              public function site_health_test() {
+                  $snapshot = $this->run_checks();
+                  $good = 0 === (int) $snapshot['summary']['critical'];
+                  return array(
+                      'label'       => $good ? 'Przemyśl Tour nie wykrywa błędów krytycznych' : 'Przemyśl Tour wykrywa błędy krytyczne',
+                      'status'      => $good ? 'good' : 'critical',
+                      'badge'       => array( 'label' => 'Przemyśl Tour', 'color' => 'blue' ),
+                      'description' => '<p>Wynik gotowości: ' . esc_html( $snapshot['score'] ) . '%. Krytyczne: ' . esc_html( $snapshot['summary']['critical'] ) . ', zalecenia: ' . esc_html( $snapshot['summary']['warning'] ) . '.</p>',
+                      'actions'     => '<p><a href="' . esc_url( admin_url( 'admin.php?page=ptr-production-readiness' ) ) . '">Otwórz pełny audyt</a></p>',
+                      'test'        => 'ptr_production_readiness',
+                  );
+              }
+
+              public function register_rest_route() {
+                  register_rest_route(
+                      'ptr/v1',
+                      '/admin/production-readiness',
+                      array(
+                          'methods'             => WP_REST_Server::READABLE,
+                          'callback'            => array( $this, 'rest_readiness' ),
+                          'permission_callback' => function () {
+                              return current_user_can( 'manage_options' );
+                          },
+                      )
+                  );
+              }
+
+              public function rest_readiness() {
+                  return rest_ensure_response( $this->run_checks() );
+              }
+          }
+
+          PTR_Production_Readiness::instance();
+          PHP
+
+          cat > work/build/przemysl-tour-races/assets/css/production-readiness.css <<'CSS'
+          .ptr-stage15-wrap{max-width:1280px}.ptr-stage15-header{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin:18px 0}.ptr-stage15-header h1{margin-bottom:6px}.ptr-stage15-header p{font-size:14px;color:#50575e}.ptr-stage15-actions{display:flex;flex-wrap:wrap;gap:8px}.ptr-stage15-score{display:flex;align-items:center;gap:24px;background:#fff;border:1px solid #dcdcde;border-left-width:6px;border-radius:8px;padding:22px;margin:18px 0}.ptr-stage15-score-number{width:120px;height:120px;border-radius:50%;display:grid;place-content:center;text-align:center;background:#f0f0f1}.ptr-stage15-score-number strong{font-size:30px;line-height:1}.ptr-stage15-score-number span{margin-top:5px}.ptr-stage15-status-good{--ptr15-color:#008a20}.ptr-stage15-status-warning{--ptr15-color:#996800}.ptr-stage15-status-critical{--ptr15-color:#b32d2e}.ptr-stage15-score,.ptr-stage15-check{border-left-color:var(--ptr15-color)}.ptr-stage15-score-number,.ptr-stage15-check>.dashicons{color:var(--ptr15-color)}.ptr-stage15-panel{background:#fff;border:1px solid #dcdcde;border-radius:8px;padding:22px;margin:18px 0}.ptr-stage15-panel>h2{margin-top:0}.ptr-stage15-checks{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.ptr-stage15-check{display:flex;gap:13px;border:1px solid #dcdcde;border-left-width:5px;border-radius:6px;padding:15px}.ptr-stage15-check>.dashicons{font-size:25px;width:25px;height:25px}.ptr-stage15-check h3{margin:0 0 5px}.ptr-stage15-check p{margin:0 0 7px;color:#50575e}.ptr-stage15-check div>span{font-weight:700;color:var(--ptr15-color)}.ptr-stage15-deployment-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 20px;margin:18px 0}.ptr-stage15-deployment-list label,.ptr-stage15-approval{display:flex;gap:9px;align-items:flex-start;padding:10px;border:1px solid #dcdcde;border-radius:5px}.ptr-stage15-deployment-list input,.ptr-stage15-approval input{margin-top:2px}.ptr-stage15-tool-result.is-error{color:#b32d2e;font-weight:700}.ptr-stage15-tool-result.is-success{color:#008a20;font-weight:700}@media(max-width:782px){.ptr-stage15-header{display:block}.ptr-stage15-actions{margin-top:14px}.ptr-stage15-score{align-items:flex-start}.ptr-stage15-score-number{width:88px;height:88px;flex:0 0 88px}.ptr-stage15-checks,.ptr-stage15-deployment-list{grid-template-columns:1fr}}@media(prefers-reduced-motion:reduce){.ptr-stage15-wrap *{transition:none!important;animation:none!important}}
+          CSS
+
+          cat > work/build/przemysl-tour-races/assets/js/production-readiness.js <<'JS'
+          (function($){
+              'use strict';
+              function message(text){$('.ptr-stage15-live').text('');setTimeout(function(){$('.ptr-stage15-live').text(text);},20);}
+              $('.ptr-stage15-run-audit').on('click',function(){
+                  var button=$(this).prop('disabled',true).text(PTRStage15.running);
+                  $.post(PTRStage15.ajaxUrl,{action:'ptr_stage15_run_audit',nonce:PTRStage15.nonce})
+                      .done(function(response){if(response.success){message(response.data.message);window.location.reload();}else{message(PTRStage15.error);button.prop('disabled',false).text('Uruchom pełny audyt');}})
+                      .fail(function(){message(PTRStage15.error);button.prop('disabled',false).text('Uruchom pełny audyt');});
+              });
+              $('.ptr-stage15-clear-cache').on('click',function(){
+                  var button=$(this).prop('disabled',true),out=$('.ptr-stage15-tool-result').removeClass('is-error is-success').text('Czyszczenie cache…');
+                  $.post(PTRStage15.ajaxUrl,{action:'ptr_stage15_clear_cache',nonce:PTRStage15.nonce})
+                      .done(function(response){out.addClass(response.success?'is-success':'is-error').text(response.data&&response.data.message?response.data.message:PTRStage15.error);})
+                      .fail(function(){out.addClass('is-error').text(PTRStage15.error);})
+                      .always(function(){button.prop('disabled',false);});
+              });
+          })(jQuery);
+          JS
+
+      - name: Integrate module and update versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path('work/build/przemysl-tour-races')
+          main = root / 'przemysl-tour-races.php'
+          text = main.read_text(encoding='utf-8')
+          text, header_count = re.subn(r'(\*\s*Version:\s*)[0-9]+(?:\.[0-9]+)+', r'\g<1>1.5.0', text, count=1)
+          if header_count != 1:
+              raise SystemExit('Nie znaleziono naglowka Version w pliku glownym')
+          text, version_count = re.subn(
+              r"(define\s*\(\s*['\"]PTR_VERSION['\"]\s*,\s*['\"])[^'\"]+(['\"]\s*\)\s*;)",
+              r'\g<1>1.5.0\g<2>',
+              text,
+              count=1,
+          )
+          if version_count != 1:
+              raise SystemExit('Nie znaleziono stalej PTR_VERSION')
+          text, db_count = re.subn(
+              r"(define\s*\(\s*['\"]PTR_DB_VERSION['\"]\s*,\s*['\"])[^'\"]+(['\"]\s*\)\s*;)",
+              r'\g<1>2.3.0\g<2>',
+              text,
+              count=1,
+          )
+          if db_count != 1:
+              raise SystemExit('Nie znaleziono stalej PTR_DB_VERSION')
+          include_line = "\n// Etap 15: finalny audyt i gotowosc produkcyjna.\nrequire_once __DIR__ . '/includes/class-ptr-production-readiness.php';\n"
+          if 'class-ptr-production-readiness.php' not in text:
+              text = text.rstrip() + include_line
+          main.write_text(text, encoding='utf-8')
+
+          for readme_name in ('readme.txt', 'README.md'):
+              path = root / readme_name
+              if path.exists():
+                  content = path.read_text(encoding='utf-8')
+                  content = re.sub(r'(Stable tag:\s*)[0-9]+(?:\.[0-9]+)+', r'\g<1>1.5.0', content, count=1, flags=re.I)
+                  if 'Etap 15' not in content:
+                      content += '\n\n## Etap 15 / wersja 1.5.0\n- Końcowy audyt gotowości produkcyjnej.\n- Lista wdrożeniowa i eksport bezpiecznej diagnostyki.\n- Integracja ze Stanem witryny i panelem WordPress.\n- Dokumentacja administratora, wdrożenia i testów regresji.\n'
+                  path.write_text(content, encoding='utf-8')
+          PY
+
+      - name: Add final documentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > work/build/przemysl-tour-races/docs/WDROZENIE-PRODUKCYJNE.md <<'MD'
+          # Wdrożenie produkcyjne – Przemyśl Tour 1.5.0
+
+          ## Przed aktualizacją
+          1. Wykonaj pełną kopię bazy danych i katalogu `wp-content`.
+          2. Sprawdź wersję 1.5.0 na kopii stagingowej.
+          3. Zachowaj paczkę 1.4.0 oraz kopię bazy jako punkt powrotu.
+          4. Sprawdź wymagania: WordPress 6.0+, PHP 7.4+, SimpleXML, HTTPS i zapisywalny katalog uploads.
+
+          ## Aktualizacja
+          1. W panelu WordPress wybierz **Wtyczki → Dodaj wtyczkę → Wyślij wtyczkę**.
+          2. Wgraj `przemysl-tour-races-1.5.0.zip`.
+          3. Wybierz **Zastąp obecną przesłaną wersją**.
+          4. Nie usuwaj istniejącej wtyczki i nie kasuj jej tabel.
+          5. Otwórz **Przemyśl Tour → Wydanie produkcyjne** i uruchom pełny audyt.
+
+          ## Test dymny po wdrożeniu
+          - otwórz stronę wyścigu, trasę, mapę i profil wysokościowy;
+          - wykonaj testowe zgłoszenie i sprawdź wiadomość e-mail;
+          - sprawdź listę startową i panel uczestników;
+          - zaimportuj próbny plik wyników na wydarzeniu testowym;
+          - sprawdź wyniki, klasyfikację drużynową i certyfikat;
+          - sprawdź REST API, sitemapę oraz `llms.txt`;
+          - sprawdź stronę na telefonie i obsługę klawiaturą;
+          - sprawdź WP-Cron oraz kolejkę IndexNow, jeżeli jest aktywna.
+
+          ## Powrót do 1.4.0
+          1. Włącz tryb serwisowy na poziomie hostingu lub strony.
+          2. Przywróć pliki wtyczki 1.4.0 i kopię bazy wykonaną przed aktualizacją.
+          3. Nie próbuj ręcznie usuwać tabel ani kolumn.
+          4. Wyczyść cache aplikacyjny, obiektowy i CDN.
+          MD
+
+          cat > work/build/przemysl-tour-races/docs/ADMINISTRATOR.md <<'MD'
+          # Podręcznik administratora – Przemyśl Tour 1.5.0
+
+          ## Najważniejsze moduły
+          - **Wyścigi** – wydarzenia, edycje, terminy, harmonogram, partnerzy i FAQ.
+          - **Trasy** – GPX, mapy, profile, segmenty, punkty i pliki do pobrania.
+          - **Uczestnicy** – zapisy, limity, lista rezerwowa, płatności i eksporty.
+          - **Wyniki** – import CSV/XLSX, klasyfikacje, checkpointy i certyfikaty.
+          - **Komunikacja** – aktualności, alerty, poradniki i materiały partnerów.
+          - **SEO i AI** – dane strukturalne, mapy XML, Open Graph, LLMS i IndexNow.
+          - **Ustawienia** – Google Maps, WCAG, mobile, cache i wydajność.
+          - **Wydanie produkcyjne** – końcowy audyt i lista wdrożeniowa.
+
+          ## Zasady bezpieczeństwa
+          - dostęp do uczestników i wyników powierzaj wyłącznie upoważnionym kontom;
+          - nie przesyłaj eksportów uczestników zwykłą pocztą bez zabezpieczenia;
+          - regularnie sprawdzaj retencję i narzędzia prywatności WordPressa;
+          - klucz Google Maps ogranicz do domeny i wyłącznie potrzebnych API;
+          - nie włączaj `WP_DEBUG_DISPLAY` na stronie produkcyjnej;
+          - aktualizacje wykonuj najpierw na stagingu.
+
+          ## Codzienna obsługa wydarzenia
+          1. Sprawdź aktywne komunikaty i termin zapisów.
+          2. Sprawdź liczbę wolnych miejsc, listę rezerwową i płatności.
+          3. Zweryfikuj działanie mapy i plików GPX po zmianie trasy.
+          4. Po zawodach zaimportuj wyniki i ręcznie sprawdź pierwsze miejsca oraz wyjątki DNS/DNF/DSQ.
+          5. Dopiero po kontroli włącz publiczne wyniki i certyfikaty.
+          MD
+
+          cat > work/build/przemysl-tour-races/docs/TESTY-ETAP-15.md <<'MD'
+          # Scenariusze testowe Etapu 15
+
+          ## Aktualizacja
+          - WordPress rozpoznaje paczkę jako aktualizację katalogu `przemysl-tour-races`.
+          - Wszystkie wyścigi, trasy, zgłoszenia, wyniki i ustawienia pozostają dostępne.
+          - Wersja kodu wynosi 1.5.0, a wersja danych 2.3.0.
+
+          ## Audyt
+          - Panel Wydanie produkcyjne jest dostępny tylko dla administratora.
+          - Audyt pokazuje PHP, WordPress, HTTPS, REST, uploads, SimpleXML, tabele i Google Maps.
+          - Eksport JSON nie zawiera danych osobowych uczestników.
+          - Stan witryny prezentuje test gotowości produkcyjnej.
+
+          ## Regresja
+          - import GPX i wizualizacja mapy;
+          - edycja segmentów i punktów;
+          - formularz zapisów, anulowanie i przepisanie pakietu;
+          - lista startowa oraz eksport CSV/XLSX;
+          - import wyników, remisy, DNS, DNF i DSQ;
+          - klasyfikacja drużynowa i certyfikat;
+          - Elementor, Gutenberg i shortcode;
+          - SEO, Schema.org, sitemap, LLMS i IndexNow;
+          - WCAG, fokus, reduced motion i tabele mobilne.
+          MD
+
+          cat > work/build/przemysl-tour-races/docs/RAPORT-WERYFIKACJI-1.5.0.md <<'MD'
+          # Raport weryfikacji 1.5.0
+
+          Wersja 1.5.0 została zbudowana bezpośrednio z pełnej paczki 1.4.0. Proces build:
+          - zachowuje wszystkie pliki wersji bazowej;
+          - modyfikuje ten sam plik główny `przemysl-tour-races.php`;
+          - dodaje końcowy moduł audytu produkcyjnego;
+          - wykonuje lint wszystkich plików PHP;
+          - sprawdza składnię JavaScript i JSON;
+          - sprawdza pojedynczy katalog główny paczki;
+          - testuje integralność ZIP i generuje SHA-256.
+
+          Pełne testy funkcjonalne z rzeczywistą bazą, SMTP, Google Maps i operatorem płatności muszą zostać wykonane na kopii docelowego WordPressa.
+          MD
+
+          cat >> work/build/przemysl-tour-races/docs/ARCHITEKTURA.md <<'MD'
+
+          ## Etap 15 – warstwa gotowości produkcyjnej
+          - `includes/class-ptr-production-readiness.php` – audyt, checklista, Site Health, REST i eksport diagnostyczny.
+          - `assets/css/production-readiness.css` – dostępny panel administracyjny.
+          - `assets/js/production-readiness.js` – asynchroniczny audyt i czyszczenie cache.
+          - `docs/ADMINISTRATOR.md` – instrukcja codziennej obsługi.
+          - `docs/WDROZENIE-PRODUKCYJNE.md` – procedura aktualizacji i rollbacku.
+          MD
+
+      - name: Static verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=work/build/przemysl-tour-races
+          test -f "$ROOT/przemysl-tour-races.php"
+          grep -q 'Version: 1.5.0' "$ROOT/przemysl-tour-races.php"
+          grep -Eq "PTR_VERSION['\"]?[[:space:]]*,[[:space:]]*['\"]1\.5\.0" "$ROOT/przemysl-tour-races.php"
+          grep -Eq "PTR_DB_VERSION['\"]?[[:space:]]*,[[:space:]]*['\"]2\.3\.0" "$ROOT/przemysl-tour-races.php"
+          test "$(grep -RIl 'Plugin Name:' "$ROOT" --include='*.php' | wc -l)" -eq 1
+          test "$(grep -c 'class-ptr-production-readiness.php' "$ROOT/przemysl-tour-races.php")" -eq 1
+
+          PHP_COUNT=0
+          while IFS= read -r -d '' file; do
+            php -l "$file" >/dev/null
+            PHP_COUNT=$((PHP_COUNT+1))
+          done < <(find "$ROOT" -type f -name '*.php' -print0)
+          echo "PHP files checked: $PHP_COUNT"
+
+          JS_COUNT=0
+          while IFS= read -r -d '' file; do
+            node --check "$file" >/dev/null
+            JS_COUNT=$((JS_COUNT+1))
+          done < <(find "$ROOT" -type f -name '*.js' -print0)
+          echo "JS files checked: $JS_COUNT"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          count=0
+          for p in Path('work/build/przemysl-tour-races').rglob('*.json'):
+              json.loads(p.read_text(encoding='utf-8'))
+              count += 1
+          print('JSON files checked:', count)
+          PY
+
+          BEFORE="$(wc -l < work/files-before.txt)"
+          AFTER="$(find "$ROOT" -type f | wc -l)"
+          test "$AFTER" -ge "$BEFORE"
+          echo "Files before: $BEFORE; after: $AFTER"
+
+      - name: Build installable update ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd work/build
+          zip -qr ../../dist/przemysl-tour-races-1.5.0.zip przemysl-tour-races
+          cd ../..
+          unzip -t dist/przemysl-tour-races-1.5.0.zip
+          ROOTS="$(zipinfo -1 dist/przemysl-tour-races-1.5.0.zip | cut -d/ -f1 | sort -u)"
+          test "$ROOTS" = 'przemysl-tour-races'
+          sha256sum dist/przemysl-tour-races-1.5.0.zip > dist/przemysl-tour-races-1.5.0.zip.sha256
+          cp work/build/przemysl-tour-races/docs/TESTY-ETAP-15.md dist/
+          cp work/build/przemysl-tour-races/docs/RAPORT-WERYFIKACJI-1.5.0.md dist/
+          cp work/build/przemysl-tour-races/docs/ADMINISTRATOR.md dist/
+          cp work/build/przemysl-tour-races/docs/WDROZENIE-PRODUKCYJNE.md dist/
+          ls -lh dist
+
+      - name: Upload completed release
+        uses: actions/upload-artifact@v4
+        with:
+          name: przemysl-tour-races-1.5.0-release
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
