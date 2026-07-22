@@ -1,0 +1,52 @@
+name: Package installable Przemysl Tour 1.5.0
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/package-stage15-installable.yml'
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download verified Stage 15 release artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl -fL \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            'https://api.github.com/repos/rafikpor-prog/open_data/actions/artifacts/8527050321/zip' \
+            -o /tmp/release-artifact.zip
+          unzip -t /tmp/release-artifact.zip
+          mkdir -p /tmp/release
+          unzip -q /tmp/release-artifact.zip -d /tmp/release
+          test -f /tmp/release/przemysl-tour-races-1.5.0.zip
+          unzip -t /tmp/release/przemysl-tour-races-1.5.0.zip
+
+      - name: Prepare exact WordPress install structure
+        run: |
+          set -euo pipefail
+          rm -rf installable
+          mkdir -p installable
+          unzip -q /tmp/release/przemysl-tour-races-1.5.0.zip -d installable
+          test -f installable/przemysl-tour-races/przemysl-tour-races.php
+          test "$(find installable -mindepth 1 -maxdepth 1 -type d -printf '%f\n')" = 'przemysl-tour-races'
+          test "$(grep -RIl 'Plugin Name:' installable/przemysl-tour-races --include='*.php' | wc -l)" -eq 1
+          grep -q 'Version: 1.5.0' installable/przemysl-tour-races/przemysl-tour-races.php
+
+      - name: Upload ZIP directly installable by WordPress
+        uses: actions/upload-artifact@v4
+        with:
+          name: przemysl-tour-races-1.5.0-wordpress-update
+          path: installable/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
