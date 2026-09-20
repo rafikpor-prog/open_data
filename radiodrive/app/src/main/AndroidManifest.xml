@@ -32,6 +32,14 @@
             android:foregroundServiceType="mediaPlayback">
             <intent-filter>
                 <action android:name="androidx.media3.session.MediaLibraryService" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name=".playback.LegacyAutoMediaService"
+            android:exported="true"
+            android:label="RadioDrive">
+            <intent-filter>
                 <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
         </service>

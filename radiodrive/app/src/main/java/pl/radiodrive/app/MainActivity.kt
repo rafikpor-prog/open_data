@@ -106,6 +106,7 @@ private fun RadioDriveApp(controller: MediaController?) {
     var isBuffering by remember { mutableStateOf(controller?.playbackState == Player.STATE_BUFFERING) }
     var liveTitle by remember { mutableStateOf<String?>(null) }
     var liveArtist by remember { mutableStateOf<String?>(null) }
+    var streamMetadata by remember { mutableStateOf<List<String>>(emptyList()) }
     var favoriteVersion by remember { mutableIntStateOf(0) }
     var historyVersion by remember { mutableIntStateOf(0) }
 
@@ -120,6 +121,7 @@ private fun RadioDriveApp(controller: MediaController?) {
                 currentId = mediaItem?.mediaId
                 liveTitle = null
                 liveArtist = null
+                streamMetadata = emptyList()
             }
             override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
                 val id = controller.currentMediaItem?.mediaId.orEmpty()
@@ -138,6 +140,14 @@ private fun RadioDriveApp(controller: MediaController?) {
                     library.rememberTrack(id, historyText)
                     historyVersion++
                 }
+            }
+            override fun onMetadata(metadata: androidx.media3.common.Metadata) {
+                val decoded = buildList {
+                    for (index in 0 until metadata.length()) {
+                        prettifyStreamMetadata(metadata[index].toString())?.let(::add)
+                    }
+                }.distinct().take(8)
+                if (decoded.isNotEmpty()) streamMetadata = decoded
             }
         }
         controller.addListener(listener)
@@ -217,6 +227,7 @@ private fun RadioDriveApp(controller: MediaController?) {
                 liveTitle = if (details.id == currentId) liveTitle else null,
                 liveArtist = if (details.id == currentId) liveArtist else null,
                 history = remember(details.id, historyVersion) { library.trackHistory(details.id) },
+                streamMetadata = if (details.id == currentId) streamMetadata else emptyList(),
                 favorite = details.id in favorites,
                 onPlayPause = {
                     if (details.id != currentId) play(controller, repository, details)
@@ -575,6 +586,7 @@ private fun PlayerDetailsScreen(
     liveTitle: String?,
     liveArtist: String?,
     history: List<String>,
+    streamMetadata: List<String>,
     favorite: Boolean,
     onPlayPause: () -> Unit,
     onFavorite: () -> Unit,
@@ -668,6 +680,25 @@ private fun PlayerDetailsScreen(
 
             item { StationWebInfoPanel(station) }
 
+            if (streamMetadata.isNotEmpty()) {
+                item {
+                    Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+                        Column(Modifier.fillMaxWidth().padding(18.dp)) {
+                            Text("Metadane emitowane przez strumień", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Black)
+                            Text(
+                                "RadioDrive odbiera wszystkie wpisy metadanych przekazane przez Media3 z ICY / ID3 / HLS.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            streamMetadata.forEach { entry ->
+                                Text("• $entry", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 2.dp))
+                            }
+                        }
+                    }
+                }
+            }
+
             item {
                 Text("Informacje o transmisji", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
                 Spacer(Modifier.height(8.dp))
@@ -760,5 +791,31 @@ private fun StationLogo(station: Station?, size: androidx.compose.ui.unit.Dp) {
                 Text(station?.name?.take(2)?.uppercase() ?: "RD", fontWeight = FontWeight.Black, color = RadioAmber)
             }
         }
+    }
+}
+
+
+private fun prettifyStreamMetadata(raw: String): String? {
+    val text = raw.trim().replace(Regex("\\s+"), " ")
+    if (text.isBlank() || text.length > 600) return null
+
+    val preferred = Regex(
+        """(?i)(?:streamtitle|title|artist|album|description|text|value)\s*=\s*["']?([^,"'}\]]{2,220})"""
+    ).findAll(text)
+        .map { match -> match.groupValues[1].trim() }
+        .filter { it.isNotBlank() }
+        .distinct()
+        .joinToString(" • ")
+
+    if (preferred.isNotBlank()) return preferred.take(240)
+
+    val cleaned = text
+        .replace(Regex("""^[A-Za-z0-9_.$]+\s*[:{(]\s*"""), "")
+        .trim('}', ')', ' ', '"', '\'')
+
+    return cleaned.takeIf {
+        it.length in 3..220 &&
+            !it.contains("@") &&
+            !it.matches(Regex("""[0-9a-fA-F]{32,}"""))
     }
 }

@@ -15,6 +15,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -44,12 +46,22 @@ data class WeatherState(
     val loading: Boolean = false,
     val data: WeatherData? = null,
     val error: String? = null,
+    val updatedAt: Long = 0L,
 )
 
 class WeatherRepository private constructor(private val context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val _state = MutableStateFlow(WeatherState())
     val state: StateFlow<WeatherState> = _state.asStateFlow()
+
+    init {
+        scope.launch {
+            while (isActive) {
+                delay(30 * 60 * 1000L)
+                if (hasLocationPermission()) refresh()
+            }
+        }
+    }
 
     fun refresh() {
         if (_state.value.loading) return
@@ -65,11 +77,12 @@ class WeatherRepository private constructor(private val context: Context) {
                     ?: error("Nie udało się ustalić lokalizacji telefonu. Sprawdź, czy lokalizacja systemowa jest włączona.")
                 fetchWeather(location)
             }.onSuccess {
-                _state.value = WeatherState(data = it)
+                _state.value = WeatherState(data = it, updatedAt = System.currentTimeMillis())
             }.onFailure {
                 _state.value = WeatherState(
                     data = _state.value.data,
-                    error = it.message ?: "Nie udało się pobrać pogody."
+                    error = it.message ?: "Nie udało się pobrać pogody.",
+                    updatedAt = _state.value.updatedAt
                 )
             }
         }
@@ -136,7 +149,7 @@ class WeatherRepository private constructor(private val context: Context) {
             requestMethod = "GET"
             connectTimeout = 10_000
             readTimeout = 15_000
-            setRequestProperty("User-Agent", "RadioDrive/2.1 Android")
+            setRequestProperty("User-Agent", "RadioDrive/2.3 Android")
             setRequestProperty("Accept", "application/json")
         }
 
