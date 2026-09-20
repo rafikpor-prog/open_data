@@ -47,6 +47,7 @@ import com.google.common.util.concurrent.ListenableFuture
 import pl.radiodrive.app.data.AppMigration
 import pl.radiodrive.app.data.StationRepository
 import pl.radiodrive.app.data.UserLibrary
+import pl.radiodrive.app.alerts.SafetyAlertsPanel
 import pl.radiodrive.app.weather.WeatherPanel
 import pl.radiodrive.app.model.Station
 import pl.radiodrive.app.playback.RadioPlaybackService
@@ -109,6 +110,7 @@ private fun RadioDriveApp(controller: MediaController?) {
     var streamMetadata by remember { mutableStateOf<List<String>>(emptyList()) }
     var favoriteVersion by remember { mutableIntStateOf(0) }
     var historyVersion by remember { mutableIntStateOf(0) }
+    var editingStation by remember { mutableStateOf<Station?>(null) }
 
     DisposableEffect(controller) {
         if (controller == null) return@DisposableEffect onDispose { }
@@ -183,7 +185,11 @@ private fun RadioDriveApp(controller: MediaController?) {
                     }
                 },
                 actions = {
-                    if (details == null) {
+                    if (details != null) {
+                        IconButton(onClick = { editingStation = details }) {
+                            Icon(Icons.Rounded.Edit, "Edytuj stację")
+                        }
+                    } else {
                         IconButton(onClick = repository::refresh) {
                             if (catalog.isLoading) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                             else Icon(Icons.Rounded.Refresh, "Odśwież")
@@ -275,6 +281,27 @@ private fun RadioDriveApp(controller: MediaController?) {
                 )
             }
         }
+    }
+
+    editingStation?.let { station ->
+        StationEditorDialog(
+            station = station,
+            canReset = repository.isEdited(station.id),
+            onDismiss = { editingStation = null },
+            onSave = { edited ->
+                repository.saveEditedStation(edited)
+                if (edited.id == currentId) play(controller, repository, edited)
+                editingStation = null
+            },
+            onReset = {
+                val id = station.id
+                repository.resetEditedStation(id)
+                repository.find(id)?.let { restored ->
+                    if (id == currentId) play(controller, repository, restored)
+                }
+                editingStation = null
+            }
+        )
     }
 }
 
@@ -666,6 +693,10 @@ private fun PlayerDetailsScreen(
                 )
             }
 
+            item { WeatherPanel() }
+
+            item { SafetyAlertsPanel() }
+
             item {
                 InfoPanel(
                     icon = Icons.Rounded.SkipNext,
@@ -818,4 +849,130 @@ private fun prettifyStreamMetadata(raw: String): String? {
             !it.contains("@") &&
             !it.matches(Regex("""[0-9a-fA-F]{32,}"""))
     }
+}
+
+
+@Composable
+private fun StationEditorDialog(
+    station: Station,
+    canReset: Boolean,
+    onDismiss: () -> Unit,
+    onSave: (Station) -> Unit,
+    onReset: () -> Unit,
+) {
+    var name by remember(station.id) { mutableStateOf(station.name) }
+    var streamUrl by remember(station.id) { mutableStateOf(station.streamUrl) }
+    var logoUrl by remember(station.id) { mutableStateOf(station.logoUrl.orEmpty()) }
+    var homepage by remember(station.id) { mutableStateOf(station.homepage.orEmpty()) }
+    var category by remember(station.id) { mutableStateOf(station.category) }
+    var state by remember(station.id) { mutableStateOf(station.state) }
+
+    val streamOk = streamUrl.trim().startsWith("http://") || streamUrl.trim().startsWith("https://")
+    val logoOk = logoUrl.isBlank() || logoUrl.trim().startsWith("http://") || logoUrl.trim().startsWith("https://")
+    val canSave = name.isNotBlank() && streamOk && logoOk
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edytuj stację", fontWeight = FontWeight.Black) },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                if (logoUrl.isNotBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(18.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                    ) {
+                        AsyncImage(
+                            model = logoUrl,
+                            contentDescription = "Podgląd logo",
+                            modifier = Modifier.size(96.dp).padding(8.dp),
+                            contentScale = ContentScale.Fit
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Nazwa stacji") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = streamUrl,
+                    onValueChange = { streamUrl = it },
+                    label = { Text("Adres strumienia") },
+                    supportingText = { Text("Bezpośredni publiczny URL MP3/AAC/HLS") },
+                    isError = streamUrl.isNotBlank() && !streamOk,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = logoUrl,
+                    onValueChange = { logoUrl = it },
+                    label = { Text("Logo – zewnętrzny URL") },
+                    isError = logoUrl.isNotBlank() && !logoOk,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = homepage,
+                    onValueChange = { homepage = it },
+                    label = { Text("Strona stacji") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = category,
+                        onValueChange = { category = it },
+                        label = { Text("Kategoria") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = state,
+                        onValueChange = { state = it },
+                        label = { Text("Region") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                Text(
+                    "Zmiany są zapisywane lokalnie i mają pierwszeństwo nad danymi pobranymi przy odświeżeniu katalogu.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onSave(
+                        station.copy(
+                            name = name.trim(),
+                            streamUrl = streamUrl.trim(),
+                            logoUrl = logoUrl.trim().takeIf { it.isNotBlank() },
+                            homepage = homepage.trim().takeIf { it.isNotBlank() },
+                            category = category.trim().ifBlank { "Różne" },
+                            state = state.trim(),
+                        )
+                    )
+                },
+                enabled = canSave
+            ) {
+                Text("Zapisz")
+            }
+        },
+        dismissButton = {
+            Row {
+                if (canReset) {
+                    TextButton(onClick = onReset) { Text("Przywróć dane katalogu") }
+                }
+                TextButton(onClick = onDismiss) { Text("Anuluj") }
+            }
+        }
+    )
 }

@@ -21,11 +21,12 @@ data class CatalogState(
 
 class StationRepository private constructor(private val context: Context) {
     private val client = RadioBrowserClient()
+    private val overrides = StationOverrides(context)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val cacheFile = File(context.filesDir, "radiodrive_stations_pl.json")
 
-    private val initial = loadCached().ifEmpty { loadFallback() }
-    private val _state = MutableStateFlow(CatalogState(stations = initial))
+    private var baseStations: List<Station> = loadCached().ifEmpty { loadFallback() }
+    private val _state = MutableStateFlow(CatalogState(stations = overrides.apply(baseStations)))
     val state: StateFlow<CatalogState> = _state.asStateFlow()
 
     init { refresh() }
@@ -33,6 +34,8 @@ class StationRepository private constructor(private val context: Context) {
     fun all(): List<Station> = _state.value.stations
 
     fun find(id: String): Station? = all().firstOrNull { it.id == id }
+
+    fun baseStation(id: String): Station? = baseStations.firstOrNull { it.id == id }
 
     fun categories(): List<String> = all().map { it.category }.distinct().sorted()
 
@@ -49,11 +52,12 @@ class StationRepository private constructor(private val context: Context) {
                 cacheFile.writeText(raw, Charsets.UTF_8)
                 parsed
             }.onSuccess { stations ->
+                baseStations = stations
                 _state.value = CatalogState(
-                    stations = stations,
+                    stations = overrides.apply(stations),
                     isLoading = false,
                     error = null,
-                    source = "Radio Browser • Polska",
+                    source = "Publiczne strumienie nadawców • Polska",
                 )
             }.onFailure { error ->
                 _state.update {
@@ -65,6 +69,23 @@ class StationRepository private constructor(private val context: Context) {
             }
         }
     }
+
+    fun saveEditedStation(station: Station) {
+        overrides.save(station)
+        _state.update { state ->
+            state.copy(stations = state.stations.map { if (it.id == station.id) station else it })
+        }
+    }
+
+    fun resetEditedStation(stationId: String) {
+        overrides.reset(stationId)
+        val original = baseStation(stationId) ?: return
+        _state.update { state ->
+            state.copy(stations = state.stations.map { if (it.id == stationId) original else it })
+        }
+    }
+
+    fun isEdited(stationId: String): Boolean = overrides.hasOverride(stationId)
 
     fun trackClick(stationId: String) {
         scope.launch { runCatching { client.registerClick(stationId) } }
