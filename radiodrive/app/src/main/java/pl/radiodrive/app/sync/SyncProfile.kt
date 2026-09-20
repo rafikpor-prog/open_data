@@ -31,6 +31,7 @@ object SyncClock {
 
 object SyncProfileStore {
     private const val STATION_PREFS = "station_overrides"
+    private const val CUSTOM_PREFS = "custom_stations"
     private const val LIBRARY_PREFS = "radio_library"
 
     fun export(context: Context): JSONObject {
@@ -50,11 +51,23 @@ object SyncProfileStore {
         }
         root.put("stationOverrides", stationOverrides)
 
+        val custom = context.getSharedPreferences(CUSTOM_PREFS, Context.MODE_PRIVATE)
+        root.put("customStations", custom.getString("items", "[]") ?: "[]")
+
         val library = context.getSharedPreferences(LIBRARY_PREFS, Context.MODE_PRIVATE)
-        val favorites = JSONArray()
-        library.getStringSet("favorites", emptySet()).orEmpty().sorted().forEach(favorites::put)
-        root.put("favorites", favorites)
-        root.put("recent", library.getString("recent", "").orEmpty())
+        val libraryJson = JSONObject()
+        library.all.forEach { (key, value) ->
+            when (value) {
+                is String -> libraryJson.put(key, value)
+                is Set<*> -> {
+                    val array = JSONArray()
+                    value.filterIsInstance<String>().sorted().forEach(array::put)
+                    libraryJson.put(key, array)
+                }
+                is Boolean, is Int, is Long, is Float -> libraryJson.put(key, value)
+            }
+        }
+        root.put("library", libraryJson)
 
         return root
     }
@@ -74,17 +87,44 @@ object SyncProfileStore {
         }
         stationEditor.apply()
 
+        val customPrefs = context.getSharedPreferences(CUSTOM_PREFS, Context.MODE_PRIVATE)
+        val customRaw = root.optString("customStations", "[]")
+        customPrefs.edit().putString("items", customRaw).apply()
+
         val library = context.getSharedPreferences(LIBRARY_PREFS, Context.MODE_PRIVATE)
-        val favorites = buildSet {
-            val array = root.optJSONArray("favorites") ?: JSONArray()
-            for (i in 0 until array.length()) {
-                array.optString(i).takeIf { it.isNotBlank() }?.let(::add)
+        val libraryEditor = library.edit().clear()
+        val libraryJson = root.optJSONObject("library")
+        if (libraryJson != null) {
+            val libraryKeys = libraryJson.keys()
+            while (libraryKeys.hasNext()) {
+                val key = libraryKeys.next()
+                when (val value = libraryJson.opt(key)) {
+                    is String -> libraryEditor.putString(key, value)
+                    is JSONArray -> {
+                        val set = buildSet {
+                            for (i in 0 until value.length()) {
+                                value.optString(i).takeIf { it.isNotBlank() }?.let(::add)
+                            }
+                        }
+                        libraryEditor.putStringSet(key, set)
+                    }
+                    is Boolean -> libraryEditor.putBoolean(key, value)
+                    is Int -> libraryEditor.putInt(key, value)
+                    is Long -> libraryEditor.putLong(key, value)
+                    is Number -> libraryEditor.putFloat(key, value.toFloat())
+                }
             }
+        } else {
+            val favorites = buildSet {
+                val array = root.optJSONArray("favorites") ?: JSONArray()
+                for (i in 0 until array.length()) {
+                    array.optString(i).takeIf { it.isNotBlank() }?.let(::add)
+                }
+            }
+            libraryEditor.putStringSet("favorites", favorites)
+            libraryEditor.putString("recent", root.optString("recent"))
         }
-        library.edit()
-            .putStringSet("favorites", favorites)
-            .putString("recent", root.optString("recent"))
-            .apply()
+        libraryEditor.apply()
 
         SyncClock.set(context, root.optLong("updatedAt", System.currentTimeMillis()))
         StationRepository.get(context).reloadOverrides()

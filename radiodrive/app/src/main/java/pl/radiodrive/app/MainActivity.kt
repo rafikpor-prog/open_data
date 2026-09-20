@@ -115,6 +115,7 @@ private fun RadioDriveApp(controller: MediaController?) {
     var favoriteVersion by remember { mutableIntStateOf(0) }
     var historyVersion by remember { mutableIntStateOf(0) }
     var editingStation by remember { mutableStateOf<Station?>(null) }
+    var addingCustomStation by rememberSaveable { mutableStateOf(false) }
     var showGoogleSync by rememberSaveable { mutableStateOf(false) }
 
     DisposableEffect(controller) {
@@ -201,6 +202,9 @@ private fun RadioDriveApp(controller: MediaController?) {
                             Icon(Icons.Rounded.Edit, "Edytuj stację")
                         }
                     } else {
+                        IconButton(onClick = { addingCustomStation = true }) {
+                            Icon(Icons.Rounded.AddCircle, "Dodaj własną stację")
+                        }
                         IconButton(onClick = repository::refresh) {
                             if (catalog.isLoading) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                             else Icon(Icons.Rounded.Refresh, "Odśwież")
@@ -211,25 +215,55 @@ private fun RadioDriveApp(controller: MediaController?) {
         },
         bottomBar = {
             if (details == null) {
-                NavigationBar {
-                    NavigationBarItem(
-                        selected = tab == AppTab.HOME,
-                        onClick = { tab = AppTab.HOME },
-                        icon = { Icon(Icons.Rounded.Home, null) },
-                        label = { Text("Start") }
-                    )
-                    NavigationBarItem(
-                        selected = tab == AppTab.ALL,
-                        onClick = { tab = AppTab.ALL },
-                        icon = { Icon(Icons.Rounded.Radio, null) },
-                        label = { Text("Stacje") }
-                    )
-                    NavigationBarItem(
-                        selected = tab == AppTab.FAVORITES,
-                        onClick = { tab = AppTab.FAVORITES },
-                        icon = { Icon(Icons.Rounded.Favorite, null) },
-                        label = { Text("Ulubione") }
-                    )
+                Column {
+                    current?.let { playing ->
+                        StickyMiniPlayer(
+                            station = playing,
+                            isPlaying = isPlaying,
+                            isBuffering = isBuffering,
+                            liveTitle = liveTitle,
+                            favorite = playing.id in favorites,
+                            onOpen = { detailsId = playing.id },
+                            onPrevious = {
+                                adjacentStation(catalog.stations, playing.id, -1)?.let {
+                                    play(controller, repository, it)
+                                }
+                            },
+                            onPlayPause = {
+                                if (controller?.isPlaying == true) controller.pause() else controller?.play()
+                            },
+                            onStop = { controller?.stop() },
+                            onNext = {
+                                adjacentStation(catalog.stations, playing.id, 1)?.let {
+                                    play(controller, repository, it)
+                                }
+                            },
+                            onFavorite = {
+                                library.toggleFavorite(playing.id)
+                                favoriteVersion++
+                            }
+                        )
+                    }
+                    NavigationBar {
+                        NavigationBarItem(
+                            selected = tab == AppTab.HOME,
+                            onClick = { tab = AppTab.HOME },
+                            icon = { Icon(Icons.Rounded.Home, null) },
+                            label = { Text("Start") }
+                        )
+                        NavigationBarItem(
+                            selected = tab == AppTab.ALL,
+                            onClick = { tab = AppTab.ALL },
+                            icon = { Icon(Icons.Rounded.Radio, null) },
+                            label = { Text("Stacje") }
+                        )
+                        NavigationBarItem(
+                            selected = tab == AppTab.FAVORITES,
+                            onClick = { tab = AppTab.FAVORITES },
+                            icon = { Icon(Icons.Rounded.Favorite, null) },
+                            label = { Text("Ulubione") }
+                        )
+                    }
                 }
             }
         }
@@ -297,7 +331,9 @@ private fun RadioDriveApp(controller: MediaController?) {
     editingStation?.let { station ->
         StationEditorDialog(
             station = station,
+            title = if (repository.isCustomStation(station.id)) "Edytuj własną stację" else "Edytuj stację",
             canReset = repository.isEdited(station.id),
+            canDelete = repository.isCustomStation(station.id),
             onDismiss = { editingStation = null },
             onSave = { edited ->
                 repository.saveEditedStation(edited)
@@ -313,14 +349,56 @@ private fun RadioDriveApp(controller: MediaController?) {
                 }
                 editingStation = null
                 googleSync.silentAuthorizeAndSync()
+            },
+            onDelete = {
+                val id = station.id
+                if (id == currentId) controller?.stop()
+                repository.deleteCustomStation(id)
+                editingStation = null
+                detailsId = null
+                googleSync.silentAuthorizeAndSync()
             }
+        )
+    }
+
+    if (addingCustomStation) {
+        StationEditorDialog(
+            station = Station(
+                id = "custom-new",
+                name = "",
+                streamUrl = "",
+                category = "Własne",
+                state = ""
+            ),
+            title = "Dodaj własną stację",
+            canReset = false,
+            canDelete = false,
+            onDismiss = { addingCustomStation = false },
+            onSave = { draft ->
+                val created = repository.createCustomStation(
+                    name = draft.name,
+                    streamUrl = draft.streamUrl,
+                    logoUrl = draft.logoUrl,
+                    homepage = draft.homepage,
+                    category = draft.category,
+                    state = draft.state,
+                )
+                addingCustomStation = false
+                detailsId = created.id
+                googleSync.silentAuthorizeAndSync()
+            },
+            onReset = {},
+            onDelete = {}
         )
     }
 
     if (showGoogleSync) {
         GoogleSyncDialog(
             onDismiss = { showGoogleSync = false },
-            onSynced = { favoriteVersion++ }
+            onSynced = {
+                favoriteVersion++
+                repository.reloadOverrides()
+            }
         )
     }
 }
@@ -873,12 +951,99 @@ private fun prettifyStreamMetadata(raw: String): String? {
 
 
 @Composable
+private fun StickyMiniPlayer(
+    station: Station,
+    isPlaying: Boolean,
+    isBuffering: Boolean,
+    liveTitle: String?,
+    favorite: Boolean,
+    onOpen: () -> Unit,
+    onPrevious: () -> Unit,
+    onPlayPause: () -> Unit,
+    onStop: () -> Unit,
+    onNext: () -> Unit,
+    onFavorite: () -> Unit,
+) {
+    Surface(
+        tonalElevation = 6.dp,
+        shadowElevation = 8.dp,
+        color = MaterialTheme.colorScheme.surface
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onOpen)
+                .padding(horizontal = 10.dp, vertical = 8.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                StationLogo(station, 48.dp)
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        station.name,
+                        fontWeight = FontWeight.Black,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        if (isBuffering) "Buforowanie…" else liveTitle ?: if (isPlaying) "LIVE" else "Wstrzymano",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (isPlaying) RadioCyan else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                IconButton(onClick = onFavorite, modifier = Modifier.size(38.dp)) {
+                    Icon(
+                        if (favorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                        "Ulubione",
+                        tint = if (favorite) RadioAmber else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onPrevious) { Icon(Icons.Rounded.SkipPrevious, "Poprzednia stacja") }
+                FilledIconButton(
+                    onClick = onPlayPause,
+                    modifier = Modifier.size(44.dp),
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = RadioAmber,
+                        contentColor = Color(0xFF201400)
+                    )
+                ) {
+                    Icon(if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, "Odtwarzaj lub pauza")
+                }
+                IconButton(onClick = onStop) { Icon(Icons.Rounded.Stop, "Zatrzymaj") }
+                IconButton(onClick = onNext) { Icon(Icons.Rounded.SkipNext, "Następna stacja") }
+                IconButton(onClick = onOpen) { Icon(Icons.Rounded.OpenInFull, "Pełny odtwarzacz") }
+            }
+        }
+    }
+}
+
+private fun adjacentStation(stations: List<Station>, currentId: String, delta: Int): Station? {
+    if (stations.isEmpty()) return null
+    val current = stations.indexOfFirst { it.id == currentId }.takeIf { it >= 0 } ?: 0
+    val next = (current + delta).floorMod(stations.size)
+    return stations.getOrNull(next)
+}
+
+private fun Int.floorMod(size: Int): Int = ((this % size) + size) % size
+
+@Composable
 private fun StationEditorDialog(
     station: Station,
+    title: String,
     canReset: Boolean,
+    canDelete: Boolean,
     onDismiss: () -> Unit,
     onSave: (Station) -> Unit,
     onReset: () -> Unit,
+    onDelete: () -> Unit,
 ) {
     var name by remember(station.id) { mutableStateOf(station.name) }
     var streamUrl by remember(station.id) { mutableStateOf(station.streamUrl) }
@@ -893,7 +1058,7 @@ private fun StationEditorDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Edytuj stację", fontWeight = FontWeight.Black) },
+        title = { Text(title, fontWeight = FontWeight.Black) },
         text = {
             Column(
                 modifier = Modifier.fillMaxWidth(),
@@ -961,7 +1126,11 @@ private fun StationEditorDialog(
                     )
                 }
                 Text(
-                    "Zmiany są zapisywane lokalnie i mają pierwszeństwo nad danymi pobranymi przy odświeżeniu katalogu.",
+                    if (station.id == "custom-new") {
+                        "Własna stacja zostanie dodana do katalogu RadioDrive, Android Auto i backupu Google."
+                    } else {
+                        "Zmiany są zapisywane lokalnie i mają pierwszeństwo nad danymi pobranymi przy odświeżeniu katalogu."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -988,6 +1157,9 @@ private fun StationEditorDialog(
         },
         dismissButton = {
             Row {
+                if (canDelete) {
+                    TextButton(onClick = onDelete) { Text("Usuń", color = MaterialTheme.colorScheme.error) }
+                }
                 if (canReset) {
                     TextButton(onClick = onReset) { Text("Przywróć dane katalogu") }
                 }

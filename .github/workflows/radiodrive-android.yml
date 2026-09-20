@@ -35,13 +35,13 @@ jobs:
       - name: Align APK and collect signer
         shell: bash
         run: |
-          "$ANDROID_SDK_ROOT/build-tools/37.0.0/zipalign" -f -P 16 4             radiodrive/app/build/outputs/apk/release/app-release-unsigned.apk             RadioDrive-2.5.0-unsigned-aligned.apk
+          "$ANDROID_SDK_ROOT/build-tools/37.0.0/zipalign" -f -P 16 4             radiodrive/app/build/outputs/apk/release/app-release-unsigned.apk             RadioDrive-2.6.0-unsigned-aligned.apk
           cp "$ANDROID_SDK_ROOT/build-tools/37.0.0/lib/apksigner.jar" apksigner.jar
       - name: Upload unsigned release
         uses: actions/upload-artifact@v4
         with:
-          name: RadioDrive-2.5-release-unsigned
+          name: RadioDrive-2.6-release-unsigned
           path: |
-            RadioDrive-2.5.0-unsigned-aligned.apk
+            RadioDrive-2.6.0-unsigned-aligned.apk
             apksigner.jar
           if-no-files-found: error

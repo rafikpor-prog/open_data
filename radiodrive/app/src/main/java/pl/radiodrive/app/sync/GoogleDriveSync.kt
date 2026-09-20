@@ -42,10 +42,13 @@ import java.net.URL
 import java.net.URLEncoder
 import java.util.Locale
 
+enum class GoogleBackupAction { CONNECT, BACKUP, RESTORE }
+
 data class GoogleSyncState(
     val accountEmail: String? = null,
     val syncing: Boolean = false,
-    val lastSyncAt: Long = 0L,
+    val lastBackupAt: Long = 0L,
+    val lastRestoreAt: Long = 0L,
     val error: String? = null,
     val revision: Int = 0,
 )
@@ -56,7 +59,8 @@ class GoogleDriveSyncManager private constructor(private val context: Context) {
     private val _state = MutableStateFlow(
         GoogleSyncState(
             accountEmail = prefs.getString(KEY_EMAIL, null),
-            lastSyncAt = prefs.getLong(KEY_LAST_SYNC, 0L),
+            lastBackupAt = prefs.getLong(KEY_LAST_BACKUP, 0L),
+            lastRestoreAt = prefs.getLong(KEY_LAST_RESTORE, 0L),
         )
     )
     val state = _state.asStateFlow()
@@ -65,8 +69,8 @@ class GoogleDriveSyncManager private constructor(private val context: Context) {
         scope.launch {
             delay(4_000L)
             while (isActive) {
-                if (!prefs.getString(KEY_EMAIL, null).isNullOrBlank()) silentAuthorizeAndSync()
-                delay(15 * 60 * 1000L)
+                if (!prefs.getString(KEY_EMAIL, null).isNullOrBlank()) silentAuthorizeAndBackup()
+                delay(30 * 60 * 1000L)
             }
         }
     }
@@ -80,25 +84,30 @@ class GoogleDriveSyncManager private constructor(private val context: Context) {
         return builder.build()
     }
 
-    fun silentAuthorizeAndSync() {
+    fun silentAuthorizeAndSync() = silentAuthorizeAndBackup()
+
+    fun silentAuthorizeAndBackup() {
         val email = prefs.getString(KEY_EMAIL, null) ?: return
         Identity.getAuthorizationClient(context)
             .authorize(authorizationRequest(email))
             .addOnSuccessListener { result ->
-                if (!result.hasResolution()) handleAuthorizationResult(result)
+                if (!result.hasResolution()) handleAuthorizationResult(result, GoogleBackupAction.BACKUP)
             }
             .addOnFailureListener { error ->
                 _state.value = _state.value.copy(error = friendlyAuthError(error))
             }
     }
 
-    fun handleAuthorizationResult(result: AuthorizationResult) {
+    fun handleAuthorizationResult(
+        result: AuthorizationResult,
+        action: GoogleBackupAction = GoogleBackupAction.CONNECT,
+    ) {
         val token = result.accessToken
         val email = runCatching { result.toGoogleSignInAccount()?.email }.getOrNull()
             ?: prefs.getString(KEY_EMAIL, null)
 
         if (token.isNullOrBlank()) {
-            _state.value = _state.value.copy(error = "Google nie zwrócił tokenu dostępu do synchronizacji.")
+            _state.value = _state.value.copy(error = "Google nie zwrócił tokenu dostępu do backupu.")
             return
         }
 
@@ -106,20 +115,27 @@ class GoogleDriveSyncManager private constructor(private val context: Context) {
             prefs.edit().putString(KEY_EMAIL, email).apply()
         }
         _state.value = _state.value.copy(accountEmail = email, error = null)
-        syncWithToken(token)
+
+        when (action) {
+            GoogleBackupAction.CONNECT -> {
+                _state.value = _state.value.copy(revision = _state.value.revision + 1)
+            }
+            GoogleBackupAction.BACKUP -> backupWithToken(token)
+            GoogleBackupAction.RESTORE -> restoreWithToken(token)
+        }
     }
 
-    fun syncWithToken(token: String) {
+    fun backupWithToken(token: String) {
         if (_state.value.syncing) return
         _state.value = _state.value.copy(syncing = true, error = null)
         scope.launch {
-            runCatching { performSync(token) }
+            runCatching { performBackup(token) }
                 .onSuccess {
                     val now = System.currentTimeMillis()
-                    prefs.edit().putLong(KEY_LAST_SYNC, now).apply()
+                    prefs.edit().putLong(KEY_LAST_BACKUP, now).apply()
                     _state.value = _state.value.copy(
                         syncing = false,
-                        lastSyncAt = now,
+                        lastBackupAt = now,
                         error = null,
                         revision = _state.value.revision + 1,
                     )
@@ -127,7 +143,31 @@ class GoogleDriveSyncManager private constructor(private val context: Context) {
                 .onFailure { error ->
                     _state.value = _state.value.copy(
                         syncing = false,
-                        error = error.message ?: "Nie udało się zsynchronizować danych z Google Drive."
+                        error = error.message ?: "Nie udało się utworzyć backupu w Google Drive."
+                    )
+                }
+        }
+    }
+
+    fun restoreWithToken(token: String) {
+        if (_state.value.syncing) return
+        _state.value = _state.value.copy(syncing = true, error = null)
+        scope.launch {
+            runCatching { performRestore(token) }
+                .onSuccess {
+                    val now = System.currentTimeMillis()
+                    prefs.edit().putLong(KEY_LAST_RESTORE, now).apply()
+                    _state.value = _state.value.copy(
+                        syncing = false,
+                        lastRestoreAt = now,
+                        error = null,
+                        revision = _state.value.revision + 1,
+                    )
+                }
+                .onFailure { error ->
+                    _state.value = _state.value.copy(
+                        syncing = false,
+                        error = error.message ?: "Nie udało się przywrócić backupu z Google Drive."
                     )
                 }
         }
@@ -153,33 +193,22 @@ class GoogleDriveSyncManager private constructor(private val context: Context) {
     }
 
     private fun clearLocalAccount() {
-        prefs.edit().remove(KEY_EMAIL).remove(KEY_LAST_SYNC).apply()
+        prefs.edit().remove(KEY_EMAIL).remove(KEY_LAST_BACKUP).remove(KEY_LAST_RESTORE).apply()
         _state.value = GoogleSyncState(revision = _state.value.revision + 1)
     }
 
-    private fun performSync(token: String) {
+    private fun performBackup(token: String) {
         val local = SyncProfileStore.export(context)
         val fileId = findProfileFile(token)
+        if (fileId == null) createProfileFile(token, local.toString())
+        else updateProfileFile(token, fileId, local.toString())
+    }
 
-        if (fileId == null) {
-            createProfileFile(token, local.toString())
-            return
-        }
-
-        val cloud = runCatching { JSONObject(downloadProfile(token, fileId)) }.getOrNull()
-        if (cloud == null) {
-            updateProfileFile(token, fileId, local.toString())
-            return
-        }
-
-        val localTime = local.optLong("updatedAt", 0L)
-        val cloudTime = cloud.optLong("updatedAt", 0L)
-
-        if (cloudTime > localTime) {
-            SyncProfileStore.import(context, cloud)
-        } else {
-            updateProfileFile(token, fileId, local.toString())
-        }
+    private fun performRestore(token: String) {
+        val fileId = findProfileFile(token)
+            ?: error("Na tym koncie Google nie ma jeszcze backupu RadioDrive.")
+        val cloud = JSONObject(downloadProfile(token, fileId))
+        SyncProfileStore.import(context, cloud)
     }
 
     private fun findProfileFile(token: String): String? {
@@ -279,7 +308,8 @@ class GoogleDriveSyncManager private constructor(private val context: Context) {
         private const val PROFILE_FILE = "radiodrive-sync.json"
         private const val PREFS = "radiodrive_google_sync"
         private const val KEY_EMAIL = "account_email"
-        private const val KEY_LAST_SYNC = "last_sync"
+        private const val KEY_LAST_BACKUP = "last_backup"
+        private const val KEY_LAST_RESTORE = "last_restore"
 
         @Volatile private var INSTANCE: GoogleDriveSyncManager? = null
 
@@ -299,6 +329,8 @@ fun GoogleSyncDialog(
     val activity = context.findActivity()
     val manager = remember { GoogleDriveSyncManager.get(context.applicationContext) }
     val state by manager.state.collectAsState()
+    var pendingAction by remember { mutableStateOf(GoogleBackupAction.CONNECT) }
+    var confirmRestore by remember { mutableStateOf(false) }
 
     LaunchedEffect(state.revision) {
         if (state.revision > 0) onSynced()
@@ -311,12 +343,15 @@ fun GoogleSyncDialog(
             runCatching {
                 Identity.getAuthorizationClient(activity)
                     .getAuthorizationResultFromIntent(result.data!!)
-            }.onSuccess(manager::handleAuthorizationResult)
+            }.onSuccess { auth ->
+                manager.handleAuthorizationResult(auth, pendingAction)
+            }
         }
     }
 
-    fun beginAuthorization(forceAccountSelection: Boolean = false) {
+    fun beginAuthorization(action: GoogleBackupAction, forceAccountSelection: Boolean = false) {
         val act = activity ?: return
+        pendingAction = action
         val request = manager.authorizationRequest(
             if (forceAccountSelection) null else state.accountEmail
         )
@@ -327,9 +362,10 @@ fun GoogleSyncDialog(
                     val pending: PendingIntent = authResult.pendingIntent ?: return@addOnSuccessListener
                     launcher.launch(IntentSenderRequest.Builder(pending.intentSender).build())
                 } else {
-                    manager.handleAuthorizationResult(authResult)
+                    manager.handleAuthorizationResult(authResult, action)
                 }
             }
+            .addOnFailureListener { }
     }
 
     AlertDialog(
@@ -338,7 +374,7 @@ fun GoogleSyncDialog(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Rounded.CloudSync, null)
                 Spacer(Modifier.width(10.dp))
-                Text("Konto Google i synchronizacja", fontWeight = FontWeight.Black)
+                Text("Konto Google i backup", fontWeight = FontWeight.Black)
             }
         },
         text = {
@@ -352,12 +388,12 @@ fun GoogleSyncDialog(
                             )
                             Spacer(Modifier.width(8.dp))
                             Column {
-                                Text(state.accountEmail ?: "Brak połączonego konta", fontWeight = FontWeight.Bold)
+                                Text(state.accountEmail ?: "Nie jesteś zalogowany", fontWeight = FontWeight.Bold)
                                 Text(
-                                    if (state.lastSyncAt > 0L) {
-                                        "Dane RadioDrive są zapisane w prywatnym appDataFolder Google Drive."
+                                    if (state.accountEmail != null) {
+                                        "Backup RadioDrive jest zapisywany w prywatnym folderze aplikacji na Google Drive."
                                     } else {
-                                        "Połącz konto, aby używać tych samych stacji na telefonie i tablecie."
+                                        "Zaloguj konto Google, aby przenosić ustawienia między telefonem i tabletem."
                                     },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -368,7 +404,7 @@ fun GoogleSyncDialog(
                 }
 
                 Text(
-                    "Synchronizowane: ulubione, ostatnio słuchane oraz ręczne zmiany nazwy stacji, adresu streamu, logo, strony WWW, kategorii i regionu.",
+                    "Backup obejmuje własne stacje i streamy, zmienione logotypy i adresy, ulubione, historię oraz ustawienia katalogu.",
                     style = MaterialTheme.typography.bodyMedium
                 )
 
@@ -376,36 +412,52 @@ fun GoogleSyncDialog(
                     Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
 
-                if (state.syncing) {
-                    LinearProgressIndicator(Modifier.fillMaxWidth())
-                }
+                if (state.syncing) LinearProgressIndicator(Modifier.fillMaxWidth())
 
                 if (state.accountEmail == null) {
                     Button(
-                        onClick = { beginAuthorization(true) },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Rounded.CloudSync, null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Połącz konto Google")
-                    }
-                } else {
-                    Button(
-                        onClick = { beginAuthorization(false) },
+                        onClick = { beginAuthorization(GoogleBackupAction.CONNECT, true) },
                         enabled = !state.syncing,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(Icons.Rounded.CloudSync, null)
+                        Icon(Icons.Rounded.AccountCircle, null)
                         Spacer(Modifier.width(8.dp))
-                        Text("Synchronizuj teraz")
+                        Text("Zaloguj kontem Google")
                     }
+                } else {
+                    Button(
+                        onClick = { beginAuthorization(GoogleBackupAction.BACKUP) },
+                        enabled = !state.syncing,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Rounded.Backup, null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Utwórz backup teraz")
+                    }
+                    OutlinedButton(
+                        onClick = { confirmRestore = true },
+                        enabled = !state.syncing,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Rounded.Restore, null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Przywróć backup z Google Drive")
+                    }
+                    Text(
+                        buildString {
+                            if (state.lastBackupAt > 0L) append("Backup jest dostępny na koncie Google. ")
+                            if (state.lastRestoreAt > 0L) append("Ostatnie przywrócenie zakończone.")
+                        }.ifBlank { "Nie wykonano jeszcze backupu w tej instalacji." },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     OutlinedButton(
                         onClick = { manager.disconnect(state.accountEmail) },
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Icon(Icons.Rounded.Logout, null)
                         Spacer(Modifier.width(8.dp))
-                        Text("Odłącz konto Google")
+                        Text("Wyloguj / odłącz konto")
                     }
                 }
             }
@@ -414,8 +466,26 @@ fun GoogleSyncDialog(
             TextButton(onClick = onDismiss) { Text("Zamknij") }
         }
     )
-}
 
+    if (confirmRestore) {
+        AlertDialog(
+            onDismissRequest = { confirmRestore = false },
+            title = { Text("Przywrócić backup?") },
+            text = {
+                Text("Dane zapisane obecnie na tym urządzeniu zostaną zastąpione ustawieniami z backupu RadioDrive na Google Drive.")
+            },
+            confirmButton = {
+                Button(onClick = {
+                    confirmRestore = false
+                    beginAuthorization(GoogleBackupAction.RESTORE)
+                }) { Text("Przywróć") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmRestore = false }) { Text("Anuluj") }
+            }
+        )
+    }
+}
 private tailrec fun Context.findActivity(): Activity? = when (this) {
     is Activity -> this
     is ContextWrapper -> baseContext.findActivity()

@@ -22,11 +22,12 @@ data class CatalogState(
 class StationRepository private constructor(private val context: Context) {
     private val client = RadioBrowserClient()
     private val overrides = StationOverrides(context)
+    private val customStations = CustomStations(context)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val cacheFile = File(context.filesDir, "radiodrive_stations_pl.json")
 
     private var baseStations: List<Station> = loadCached().ifEmpty { loadFallback() }
-    private val _state = MutableStateFlow(CatalogState(stations = overrides.apply(baseStations)))
+    private val _state = MutableStateFlow(CatalogState(stations = mergedStations()))
     val state: StateFlow<CatalogState> = _state.asStateFlow()
 
     init { refresh() }
@@ -54,7 +55,7 @@ class StationRepository private constructor(private val context: Context) {
             }.onSuccess { stations ->
                 baseStations = stations
                 _state.value = CatalogState(
-                    stations = overrides.apply(stations),
+                    stations = mergedStations(),
                     isLoading = false,
                     error = null,
                     source = "Publiczne strumienie nadawców • Polska",
@@ -71,11 +72,53 @@ class StationRepository private constructor(private val context: Context) {
     }
 
     fun saveEditedStation(station: Station) {
-        overrides.save(station)
+        if (customStations.isCustom(station.id)) {
+            customStations.save(station)
+        } else {
+            overrides.save(station)
+        }
         _state.update { state ->
-            state.copy(stations = state.stations.map { if (it.id == station.id) station else it })
+            val exists = state.stations.any { it.id == station.id }
+            val updated = if (exists) {
+                state.stations.map { if (it.id == station.id) station else it }
+            } else {
+                listOf(station) + state.stations
+            }
+            state.copy(stations = updated)
         }
     }
+
+    fun createCustomStation(
+        name: String,
+        streamUrl: String,
+        logoUrl: String? = null,
+        homepage: String? = null,
+        category: String = "Własne",
+        state: String = "",
+    ): Station {
+        val station = Station(
+            id = "custom-" + java.util.UUID.randomUUID().toString(),
+            name = name.trim(),
+            streamUrl = streamUrl.trim(),
+            logoUrl = logoUrl?.trim()?.takeIf { it.isNotBlank() },
+            homepage = homepage?.trim()?.takeIf { it.isNotBlank() },
+            category = category.trim().ifBlank { "Własne" },
+            state = state.trim(),
+            tags = listOf("własne"),
+            lastCheckOk = true,
+        )
+        customStations.save(station)
+        _state.update { it.copy(stations = listOf(station) + it.stations) }
+        return station
+    }
+
+    fun deleteCustomStation(stationId: String) {
+        if (!customStations.isCustom(stationId)) return
+        customStations.delete(stationId)
+        _state.update { state -> state.copy(stations = state.stations.filterNot { it.id == stationId }) }
+    }
+
+    fun isCustomStation(stationId: String): Boolean = customStations.isCustom(stationId)
 
     fun resetEditedStation(stationId: String) {
         overrides.reset(stationId)
@@ -89,9 +132,12 @@ class StationRepository private constructor(private val context: Context) {
 
     fun reloadOverrides() {
         _state.update { state ->
-            state.copy(stations = overrides.apply(baseStations))
+            state.copy(stations = mergedStations())
         }
     }
+
+    private fun mergedStations(): List<Station> =
+        customStations.all() + overrides.apply(baseStations)
 
     fun trackClick(stationId: String) {
         scope.launch { runCatching { client.registerClick(stationId) } }
