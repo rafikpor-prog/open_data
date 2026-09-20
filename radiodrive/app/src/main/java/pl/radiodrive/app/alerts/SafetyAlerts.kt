@@ -80,11 +80,12 @@ class SafetyAlertsRepository private constructor(private val context: Context) {
             val location = currentLocation()
             val regionSlug = currentVoivodeshipSlug(location)
             val result = runCatching {
+                val rcb = fetchRcbOfficial()
                 val rso = fetchRso(regionSlug)
                 val roads = fetchRoads(location)
-                (rso + roads)
+                (rcb + rso + roads)
                     .distinctBy { it.id }
-                    .take(12)
+                    .take(16)
             }
             result.onSuccess {
                 _state.value = SafetyFeedState(
@@ -99,6 +100,49 @@ class SafetyAlertsRepository private constructor(private val context: Context) {
                 )
             }
         }
+    }
+
+    private fun fetchRcbOfficial(): List<SafetyAlert> {
+        val base = "https://www.gov.pl"
+        val html = get("$base/web/rcb/komunikaty")
+        val anchorRegex = Regex(
+            """(?is)<a[^>]+href=["']([^"']*?/web/rcb/[^"']+)["'][^>]*>(.*?)</a>"""
+        )
+        val dateRegex = Regex("""\b\d{2}\.\d{2}\.\d{4}\b""")
+        val result = mutableListOf<SafetyAlert>()
+        val seen = mutableSetOf<String>()
+
+        anchorRegex.findAll(html).forEach { match ->
+            if (result.size >= 6) return@forEach
+            val href = match.groupValues[1]
+            val title = clean(match.groupValues[2])
+            if (!title.contains("Alert RCB", ignoreCase = true)) return@forEach
+            val url = if (href.startsWith("http")) href else base + href
+            if (!seen.add(url)) return@forEach
+
+            val start = match.range.last + 1
+            val tail = html.substring(start, (start + 900).coerceAtMost(html.length))
+            val plainTail = clean(tail)
+            val body = Regex("""[„"']([^„”"'<>]{18,500})[”"']""")
+                .find(plainTail)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.trim()
+                .orEmpty()
+            val date = dateRegex.find(
+                html.substring((match.range.first - 250).coerceAtLeast(0), match.range.first)
+            )?.value.orEmpty()
+
+            result += SafetyAlert(
+                id = "rcb-" + url.hashCode(),
+                source = AlertSource.RCB,
+                title = title,
+                body = body,
+                region = "",
+                date = date,
+            )
+        }
+        return result
     }
 
     private fun fetchRso(regionSlug: String?): List<SafetyAlert> {
@@ -196,9 +240,9 @@ class SafetyAlertsRepository private constructor(private val context: Context) {
 
     private fun fetchRoads(location: Location?): List<SafetyAlert> {
         val raw = runCatching {
-            get("https://www.gddkia.gov.pl/dane/zima_html/utrdane.xml")
+            get("https://www.archiwum.gddkia.gov.pl/dane/zima_html/utrdane.xml")
         }.recoverCatching {
-            get("http://www.gddkia.gov.pl/dane/zima_html/utrdane.xml")
+            get("http://www.archiwum.gddkia.gov.pl/dane/zima_html/utrdane.xml")
         }.getOrThrow()
 
         val parser = Xml.newPullParser().apply { setInput(raw.reader()) }
