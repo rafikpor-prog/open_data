@@ -13,6 +13,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -22,6 +25,8 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -45,6 +50,8 @@ import pl.radiodrive.app.data.UserLibrary
 import pl.radiodrive.app.weather.WeatherPanel
 import pl.radiodrive.app.model.Station
 import pl.radiodrive.app.playback.RadioPlaybackService
+import pl.radiodrive.app.road.RoadAssistPanel
+import pl.radiodrive.app.stationinfo.StationWebInfoPanel
 import pl.radiodrive.app.ui.theme.RadioAmber
 import pl.radiodrive.app.ui.theme.RadioCyan
 import pl.radiodrive.app.ui.theme.RadioDriveTheme
@@ -286,12 +293,8 @@ private fun HomeScreen(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        item {
-            NowPlayingHero(current, isPlaying, liveTitle, onDetails)
-        }
-        item {
-            WeatherPanel()
-        }
+        item { NowPlayingHero(current, isPlaying, liveTitle, onDetails) }
+        item { WeatherPanel() }
         if (error != null) {
             item {
                 Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.errorContainer) {
@@ -301,10 +304,20 @@ private fun HomeScreen(
         }
         item {
             Text("Najpopularniejsze w Polsce", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
-            Text("Aktywne strumienie posortowane według popularności katalogu", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        items(popular, key = { it.id }) { station ->
-            StationRow(station, station.id == current?.id, station.id in favorites, onClick = { onStation(station) }, onFavorite = null)
+            Text("Dotknij kafelka, aby rozpocząć słuchanie", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(10.dp))
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                items(popular, key = { it.id }) { station ->
+                    StationTile(
+                        station = station,
+                        active = station.id == current?.id,
+                        favorite = station.id in favorites,
+                        modifier = Modifier.width(164.dp),
+                        onClick = { onStation(station) },
+                        onFavorite = null
+                    )
+                }
+            }
         }
     }
 }
@@ -349,45 +362,56 @@ private fun AllStationsScreen(
     var category by rememberSaveable { mutableStateOf<String?>(null) }
     val categories = remember(stations) { stations.map { it.category }.distinct().sorted() }
     val filtered = remember(stations, query, category) {
-        stations.filter { s ->
-            (category == null || s.category == category) &&
+        stations.filter { station ->
+            (category == null || station.category == category) &&
                 (query.isBlank() ||
-                    s.name.contains(query, true) ||
-                    s.state.contains(query, true) ||
-                    s.tags.any { it.contains(query, true) })
+                    station.name.contains(query, true) ||
+                    station.state.contains(query, true) ||
+                    station.tags.any { it.contains(query, true) })
         }
     }
 
-    LazyColumn(
-        modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        item {
-            Text("Wszystkie stacje", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
-            Text("${filtered.size} z ${stations.size} aktywnych stacji", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(12.dp))
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                shape = RoundedCornerShape(18.dp),
-                leadingIcon = { Icon(Icons.Rounded.Search, null) },
-                placeholder = { Text("Nazwa, miasto, region lub gatunek") }
-            )
-            Spacer(Modifier.height(10.dp))
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                item {
-                    FilterChip(selected = category == null, onClick = { category = null }, label = { Text("Wszystkie") })
-                }
-                items(categories) { c ->
-                    FilterChip(selected = category == c, onClick = { category = if (category == c) null else c }, label = { Text(c) })
-                }
+    Column(modifier.fillMaxSize().padding(horizontal = 14.dp)) {
+        Text("Wszystkie stacje", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
+        Text("${filtered.size} z ${stations.size} aktywnych stacji", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(10.dp))
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            shape = RoundedCornerShape(18.dp),
+            leadingIcon = { Icon(Icons.Rounded.Search, null) },
+            placeholder = { Text("Nazwa, miasto, region lub gatunek") }
+        )
+        Spacer(Modifier.height(8.dp))
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            item { FilterChip(selected = category == null, onClick = { category = null }, label = { Text("Wszystkie") }) }
+            items(categories) { item ->
+                FilterChip(
+                    selected = category == item,
+                    onClick = { category = if (category == item) null else item },
+                    label = { Text(item) }
+                )
             }
         }
-        items(filtered, key = { it.id }) { station ->
-            StationRow(station, false, station.id in favorites, onClick = { onStation(station) }, onFavorite = { onFavorite(station.id) })
+        Spacer(Modifier.height(8.dp))
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(minSize = 148.dp),
+            modifier = Modifier.weight(1f),
+            contentPadding = PaddingValues(bottom = 18.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            gridItems(filtered, key = { it.id }) { station ->
+                StationTile(
+                    station = station,
+                    active = false,
+                    favorite = station.id in favorites,
+                    onClick = { onStation(station) },
+                    onFavorite = { onFavorite(station.id) }
+                )
+            }
         }
     }
 }
@@ -402,18 +426,99 @@ private fun StationsList(
     onStation: (Station) -> Unit,
     onFavorite: (String) -> Unit,
 ) {
-    LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item {
-            Text(title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
-            Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        if (stations.isEmpty()) item {
+    Column(modifier.fillMaxSize().padding(horizontal = 14.dp)) {
+        Text(title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
+        Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(10.dp))
+        if (stations.isEmpty()) {
             Surface(shape = RoundedCornerShape(22.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
-                Text("Nie masz jeszcze zapisanych stacji.", Modifier.padding(20.dp))
+                Text("Nie masz jeszcze zapisanych stacji.", Modifier.fillMaxWidth().padding(20.dp))
+            }
+        } else {
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(minSize = 148.dp),
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(bottom = 18.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                gridItems(stations, key = { it.id }) { station ->
+                    StationTile(
+                        station = station,
+                        active = false,
+                        favorite = station.id in favorites,
+                        onClick = { onStation(station) },
+                        onFavorite = { onFavorite(station.id) }
+                    )
+                }
             }
         }
-        items(stations, key = { it.id }) { station ->
-            StationRow(station, false, station.id in favorites, { onStation(station) }, { onFavorite(station.id) })
+    }
+}
+
+@Composable
+private fun StationTile(
+    station: Station,
+    active: Boolean,
+    favorite: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+    onFavorite: (() -> Unit)?,
+) {
+    Surface(
+        modifier = modifier
+            .clip(RoundedCornerShape(24.dp))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(24.dp),
+        color = if (active) MaterialTheme.colorScheme.primary.copy(alpha = .12f) else MaterialTheme.colorScheme.surface,
+        tonalElevation = if (active) 4.dp else 1.dp
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Box {
+                StationLogo(station, 112.dp)
+                if (station.lastCheckOk) {
+                    Box(
+                        Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(7.dp)
+                            .size(11.dp)
+                            .clip(CircleShape)
+                            .background(RadioCyan)
+                    )
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            Text(station.name, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(
+                station.state.ifBlank { station.category },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    buildString {
+                        if (station.codec.isNotBlank()) append(station.codec)
+                        if (station.bitrate > 0) {
+                            if (isNotEmpty()) append(" • ")
+                            append("${station.bitrate} kb/s")
+                        }
+                    }.ifBlank { "LIVE" },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = RadioAmber,
+                    modifier = Modifier.weight(1f)
+                )
+                if (onFavorite != null) {
+                    IconButton(onClick = onFavorite, modifier = Modifier.size(34.dp)) {
+                        Icon(
+                            if (favorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                            null,
+                            tint = if (favorite) RadioAmber else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -475,87 +580,129 @@ private fun PlayerDetailsScreen(
     onFavorite: () -> Unit,
 ) {
     val context = LocalContext.current
-    LazyColumn(
-        modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(18.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        item {
-            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                StationLogo(station, 150.dp)
-                Spacer(Modifier.height(14.dp))
-                Surface(shape = CircleShape, color = RadioCyan.copy(alpha = .14f)) {
-                    Text(if (isBuffering) "  BUFOROWANIE  " else if (isCurrent && isPlaying) "  LIVE  " else "  ONLINE  ", Modifier.padding(vertical = 6.dp), color = RadioCyan, fontWeight = FontWeight.Black)
+    Box(modifier.fillMaxSize()) {
+        if (!station.logoUrl.isNullOrBlank()) {
+            AsyncImage(
+                model = station.logoUrl,
+                contentDescription = null,
+                modifier = Modifier.matchParentSize().blur(52.dp).alpha(.24f),
+                contentScale = ContentScale.Crop
+            )
+        }
+        Box(
+            Modifier
+                .matchParentSize()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            MaterialTheme.colorScheme.background.copy(alpha = .72f),
+                            MaterialTheme.colorScheme.background.copy(alpha = .93f),
+                            MaterialTheme.colorScheme.background
+                        )
+                    )
+                )
+        )
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(18.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            item {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                    StationLogo(station, 176.dp)
+                    Spacer(Modifier.height(14.dp))
+                    Surface(shape = CircleShape, color = RadioCyan.copy(alpha = .15f)) {
+                        Text(
+                            if (isBuffering) "  BUFOROWANIE  " else if (isCurrent && isPlaying) "  ● LIVE  " else "  ONLINE  ",
+                            Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            color = RadioCyan,
+                            fontWeight = FontWeight.Black
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(station.name, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
+                    Text(station.subtitle.ifBlank { "Polska" }, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(16.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        FilledIconButton(
+                            onClick = onPlayPause,
+                            modifier = Modifier.size(68.dp),
+                            colors = IconButtonDefaults.filledIconButtonColors(containerColor = RadioAmber, contentColor = Color(0xFF201400))
+                        ) {
+                            Icon(if (isCurrent && isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, null, Modifier.size(36.dp))
+                        }
+                        FilledTonalIconButton(onClick = onFavorite, modifier = Modifier.size(68.dp)) {
+                            Icon(if (favorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder, null, tint = if (favorite) RadioAmber else MaterialTheme.colorScheme.onSurface)
+                        }
+                        if (station.homepage != null) {
+                            FilledTonalIconButton(
+                                onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(station.homepage))) } },
+                                modifier = Modifier.size(68.dp)
+                            ) { Icon(Icons.Rounded.Language, "Strona stacji") }
+                        }
+                    }
                 }
+            }
+
+            item {
+                InfoPanel(
+                    icon = Icons.Rounded.GraphicEq,
+                    title = "TERAZ GRAMY",
+                    main = liveTitle ?: "Słuchasz ${station.name}",
+                    secondary = liveArtist ?: "Jeśli nadawca przekazuje tytuł utworu lub audycji w strumieniu, RadioDrive pokaże go tutaj automatycznie.",
+                    accent = true
+                )
+            }
+
+            item {
+                InfoPanel(
+                    icon = Icons.Rounded.SkipNext,
+                    title = "NASTĘPNY / RAMÓWKA",
+                    main = "Dane pobierane tylko ze źródeł nadawcy",
+                    secondary = "RadioDrive nie zgaduje kolejnego utworu. Dla stacji, które udostępniają publiczną ramówkę, informacje mogą być prezentowane w sekcji stacji.",
+                    accent = false
+                )
+            }
+
+            item { RoadAssistPanel() }
+
+            item { StationWebInfoPanel(station) }
+
+            item {
+                Text("Informacje o transmisji", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
                 Spacer(Modifier.height(8.dp))
-                Text(station.name, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
-                Text(station.subtitle.ifBlank { "Polska" }, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(16.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    FilledIconButton(onClick = onPlayPause, modifier = Modifier.size(64.dp), colors = IconButtonDefaults.filledIconButtonColors(containerColor = RadioAmber, contentColor = Color(0xFF201400))) {
-                        Icon(if (isCurrent && isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, null, Modifier.size(34.dp))
-                    }
-                    FilledTonalIconButton(onClick = onFavorite, modifier = Modifier.size(64.dp)) {
-                        Icon(if (favorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder, null, tint = if (favorite) RadioAmber else MaterialTheme.colorScheme.onSurface)
-                    }
-                    if (station.homepage != null) FilledTonalIconButton(
-                        onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(station.homepage))) } },
-                        modifier = Modifier.size(64.dp)
-                    ) { Icon(Icons.Rounded.Language, "Strona stacji") }
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    item { DataChip("Jakość", station.streamQuality) }
+                    if (station.codec.isNotBlank()) item { DataChip("Kodek", station.codec) }
+                    if (station.bitrate > 0) item { DataChip("Bitrate", "${station.bitrate} kb/s") }
+                    item { DataChip("Tryb", if (station.hls) "HLS" else "Live stream") }
+                    if (station.state.isNotBlank()) item { DataChip("Region", station.state) }
                 }
             }
-        }
 
-        item {
-            InfoPanel(
-                icon = Icons.Rounded.GraphicEq,
-                title = "TERAZ GRAMY",
-                main = liveTitle ?: "Stacja nie przekazuje tytułu audycji/utworu",
-                secondary = liveArtist ?: "RadioDrive pokaże metadane automatycznie, gdy pojawią się w strumieniu.",
-                accent = true
-            )
-        }
-
-        item {
-            InfoPanel(
-                icon = Icons.Rounded.SkipNext,
-                title = "NASTĘPNY",
-                main = "Dane zależne od nadawcy",
-                secondary = "Przyszły utwór lub program nie jest częścią standardowego strumienia radia. Pole uzupełnia się tylko dla stacji udostępniających ramówkę/EPG.",
-                accent = false
-            )
-        }
-
-        item {
-            Text("Informacje o transmisji", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
-            Spacer(Modifier.height(8.dp))
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                item { DataChip("Jakość", station.streamQuality) }
-                if (station.codec.isNotBlank()) item { DataChip("Kodek", station.codec) }
-                if (station.bitrate > 0) item { DataChip("Bitrate", "${station.bitrate} kb/s") }
-                item { DataChip("Tryb", if (station.hls) "HLS" else "Live stream") }
-                if (station.state.isNotBlank()) item { DataChip("Region", station.state) }
-            }
-        }
-
-        if (station.tags.isNotEmpty()) item {
-            Text("Gatunki i tagi", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(8.dp))
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(station.tags) { tag -> AssistChip(onClick = {}, label = { Text(tag) }) }
-            }
-        }
-
-        if (history.isNotEmpty()) item {
-            Text("Ostatnio na antenie", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
-            Text("Historia metadanych zapisana przez RadioDrive", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(8.dp))
-            history.take(8).forEachIndexed { index, item ->
-                Row(Modifier.fillMaxWidth().padding(vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("${index + 1}", color = RadioAmber, fontWeight = FontWeight.Black, modifier = Modifier.width(28.dp))
-                    Text(item, modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (station.tags.isNotEmpty()) {
+                item {
+                    Text("Gatunki i tagi", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(8.dp))
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(station.tags) { tag -> AssistChip(onClick = {}, label = { Text(tag) }) }
+                    }
                 }
-                HorizontalDivider()
+            }
+
+            if (history.isNotEmpty()) {
+                item {
+                    Text("Ostatnio na antenie", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+                    Text("Historia metadanych odebranych ze strumienia", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(8.dp))
+                    history.take(8).forEachIndexed { index, entry ->
+                        Row(Modifier.fillMaxWidth().padding(vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("${index + 1}", color = RadioAmber, fontWeight = FontWeight.Black, modifier = Modifier.width(28.dp))
+                            Text(entry, modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        }
+                        HorizontalDivider()
+                    }
+                }
             }
         }
     }

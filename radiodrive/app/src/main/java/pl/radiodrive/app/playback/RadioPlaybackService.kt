@@ -2,9 +2,11 @@ package pl.radiodrive.app.playback
 
 import android.app.PendingIntent
 import android.content.Intent
+import android.os.Bundle
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
+import androidx.media.utils.MediaConstants
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
@@ -142,17 +144,29 @@ class RadioPlaybackService : MediaLibraryService() {
         }
     }
 
-    private fun browsable(id: String, title: String, subtitle: String) =
-        MediaItem.Builder()
+    private fun browsable(id: String, title: String, subtitle: String): MediaItem {
+        val extras = Bundle().apply {
+            putInt(
+                MediaConstants.DESCRIPTION_EXTRAS_KEY_CONTENT_STYLE_BROWSABLE,
+                MediaConstants.DESCRIPTION_EXTRAS_VALUE_CONTENT_STYLE_CATEGORY_GRID_ITEM
+            )
+            putInt(
+                MediaConstants.DESCRIPTION_EXTRAS_KEY_CONTENT_STYLE_PLAYABLE,
+                MediaConstants.DESCRIPTION_EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM
+            )
+        }
+        return MediaItem.Builder()
             .setMediaId(id)
             .setMediaMetadata(
                 MediaMetadata.Builder()
                     .setTitle(title)
                     .setSubtitle(subtitle)
+                    .setExtras(extras)
                     .setIsBrowsable(true)
                     .setIsPlayable(false)
                     .build()
             ).build()
+    }
 
     companion object {
         private const val ROOT = "root"
