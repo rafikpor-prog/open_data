@@ -1,0 +1,42 @@
+[
+  {
+    "id": "groove-salad",
+    "name": "Groove Salad",
+    "subtitle": "SomaFM • ambient / downtempo",
+    "streamUrl": "https://ice2.somafm.com/groovesalad-128-mp3",
+    "category": "Chill",
+    "logoUrl": null
+  },
+  {
+    "id": "drone-zone",
+    "name": "Drone Zone",
+    "subtitle": "SomaFM • atmospheric",
+    "streamUrl": "https://ice2.somafm.com/dronezone-128-mp3",
+    "category": "Ambient",
+    "logoUrl": null
+  },
+  {
+    "id": "secret-agent",
+    "name": "Secret Agent",
+    "subtitle": "SomaFM • spy / lounge",
+    "streamUrl": "https://ice2.somafm.com/secretagent-128-mp3",
+    "category": "Lounge",
+    "logoUrl": null
+  },
+  {
+    "id": "indie-pop-rocks",
+    "name": "Indie Pop Rocks!",
+    "subtitle": "SomaFM • indie",
+    "streamUrl": "https://ice2.somafm.com/indiepop-128-mp3",
+    "category": "Indie",
+    "logoUrl": null
+  },
+  {
+    "id": "beat-blender",
+    "name": "Beat Blender",
+    "subtitle": "SomaFM • deep grooves",
+    "streamUrl": "https://ice2.somafm.com/beatblender-128-mp3",
+    "category": "Electronic",
+    "logoUrl": null
+  }
+]
