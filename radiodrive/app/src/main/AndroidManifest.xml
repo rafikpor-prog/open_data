@@ -11,6 +11,7 @@
         android:label="RadioDrive"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
         android:theme="@style/Theme.RadioDrive">
 
         <activity
@@ -36,5 +37,4 @@
             android:name="com.google.android.gms.car.application"
             android:resource="@xml/automotive_app_desc" />
     </application>
-
 </manifest>

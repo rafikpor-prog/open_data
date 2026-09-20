@@ -1,11 +1,12 @@
 package pl.radiodrive.app
 
 import android.content.ComponentName
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -19,20 +20,24 @@ import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.core.content.ContextCompat
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
+import coil3.compose.AsyncImage
 import com.google.common.util.concurrent.ListenableFuture
 import pl.radiodrive.app.data.StationRepository
 import pl.radiodrive.app.data.UserLibrary
@@ -49,8 +54,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             RadioDriveTheme {
-                val controller = rememberMediaController()
-                RadioDriveApp(controller)
+                RadioDriveApp(rememberMediaController())
             }
         }
     }
@@ -58,14 +62,13 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun rememberMediaController(): MediaController? {
         var controller by remember { mutableStateOf<MediaController?>(null) }
-        val appContext = applicationContext
-
+        val app = applicationContext
         DisposableEffect(Unit) {
-            val token = SessionToken(appContext, ComponentName(appContext, RadioPlaybackService::class.java))
-            val future: ListenableFuture<MediaController> = MediaController.Builder(appContext, token).buildAsync()
+            val token = SessionToken(app, ComponentName(app, RadioPlaybackService::class.java))
+            val future: ListenableFuture<MediaController> = MediaController.Builder(app, token).buildAsync()
             future.addListener(
                 { runCatching { future.get() }.onSuccess { controller = it } },
-                ContextCompat.getMainExecutor(appContext),
+                ContextCompat.getMainExecutor(app)
             )
             onDispose {
                 controller?.let(MediaController::release)
@@ -76,306 +79,335 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class AppTab { HOME, FAVORITES, ALL }
+private enum class AppTab { HOME, ALL, FAVORITES }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun RadioDriveApp(controller: MediaController?) {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val repository = remember { StationRepository(context.applicationContext) }
-    val userLibrary = remember { UserLibrary(context.applicationContext) }
-    val stations = remember { repository.all() }
-    val categories = remember { repository.categories() }
+    val context = LocalContext.current
+    val repository = remember { StationRepository.get(context.applicationContext) }
+    val library = remember { UserLibrary(context.applicationContext) }
+    val catalog by repository.state.collectAsStateWithLifecycle()
 
     var tab by rememberSaveable { mutableStateOf(AppTab.HOME) }
-    var selectedCategory by rememberSaveable { mutableStateOf<String?>(null) }
-    var favoriteRefresh by remember { mutableIntStateOf(0) }
-    var currentMediaId by remember { mutableStateOf(controller?.currentMediaItem?.mediaId) }
+    var detailsId by rememberSaveable { mutableStateOf<String?>(null) }
+    var currentId by remember { mutableStateOf(controller?.currentMediaItem?.mediaId) }
     var isPlaying by remember { mutableStateOf(controller?.isPlaying == true) }
+    var isBuffering by remember { mutableStateOf(controller?.playbackState == Player.STATE_BUFFERING) }
+    var liveTitle by remember { mutableStateOf<String?>(null) }
+    var liveArtist by remember { mutableStateOf<String?>(null) }
+    var favoriteVersion by remember { mutableIntStateOf(0) }
+    var historyVersion by remember { mutableIntStateOf(0) }
 
     DisposableEffect(controller) {
         if (controller == null) return@DisposableEffect onDispose { }
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(value: Boolean) { isPlaying = value }
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                isBuffering = playbackState == Player.STATE_BUFFERING
+            }
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                currentMediaId = mediaItem?.mediaId
+                currentId = mediaItem?.mediaId
+                liveTitle = null
+                liveArtist = null
+            }
+            override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) {
+                val id = controller.currentMediaItem?.mediaId.orEmpty()
+                val station = repository.find(id)
+                val title = mediaMetadata.title?.toString()?.trim().orEmpty()
+                val artist = mediaMetadata.artist?.toString()?.trim().orEmpty()
+                val usefulTitle = title.takeIf {
+                    it.isNotBlank() && !it.equals(station?.name, ignoreCase = true)
+                }
+                if (usefulTitle != null) {
+                    liveTitle = usefulTitle
+                    liveArtist = artist.takeIf {
+                        it.isNotBlank() && !it.equals(station?.category, ignoreCase = true)
+                    }
+                    val historyText = listOfNotNull(liveArtist, liveTitle).joinToString(" — ")
+                    library.rememberTrack(id, historyText)
+                    historyVersion++
+                }
             }
         }
         controller.addListener(listener)
-        currentMediaId = controller.currentMediaItem?.mediaId
+        currentId = controller.currentMediaItem?.mediaId
         isPlaying = controller.isPlaying
+        isBuffering = controller.playbackState == Player.STATE_BUFFERING
         onDispose { controller.removeListener(listener) }
     }
 
-    val currentStation = stations.firstOrNull { it.id == currentMediaId }
-    val favorites = remember(favoriteRefresh) { userLibrary.favorites() }
+    val favorites = remember(favoriteVersion) { library.favorites() }
+    val current = catalog.stations.firstOrNull { it.id == currentId }
+    val details = catalog.stations.firstOrNull { it.id == detailsId }
 
     Scaffold(
-        topBar = { RadioTopBar() },
-        bottomBar = {
-            NavigationBar(tonalElevation = 0.dp) {
-                NavigationBarItem(
-                    selected = tab == AppTab.HOME,
-                    onClick = { tab = AppTab.HOME },
-                    icon = { Icon(Icons.Rounded.Home, null) },
-                    label = { Text("Start") },
-                )
-                NavigationBarItem(
-                    selected = tab == AppTab.FAVORITES,
-                    onClick = { tab = AppTab.FAVORITES },
-                    icon = { Icon(Icons.Rounded.Favorite, null) },
-                    label = { Text("Ulubione") },
-                )
-                NavigationBarItem(
-                    selected = tab == AppTab.ALL,
-                    onClick = { tab = AppTab.ALL },
-                    icon = { Icon(Icons.Rounded.Radio, null) },
-                    label = { Text("Stacje") },
-                )
-            }
+        topBar = {
+            TopAppBar(
+                title = {
+                    if (details != null) {
+                        Column {
+                            Text(details.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold)
+                            Text("RadioDrive • Polska", style = MaterialTheme.typography.labelSmall)
+                        }
+                    } else {
+                        Column {
+                            Text("RadioDrive", fontWeight = FontWeight.Black)
+                            Text("${catalog.stations.size} aktywnych polskich stacji", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                },
+                navigationIcon = {
+                    if (details != null) {
+                        IconButton(onClick = { detailsId = null }) { Icon(Icons.Rounded.ArrowBack, "Wróć") }
+                    }
+                },
+                actions = {
+                    if (details == null) {
+                        IconButton(onClick = repository::refresh) {
+                            if (catalog.isLoading) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                            else Icon(Icons.Rounded.Refresh, "Odśwież")
+                        }
+                    }
+                }
+            )
         },
+        bottomBar = {
+            if (details == null) {
+                NavigationBar {
+                    NavigationBarItem(
+                        selected = tab == AppTab.HOME,
+                        onClick = { tab = AppTab.HOME },
+                        icon = { Icon(Icons.Rounded.Home, null) },
+                        label = { Text("Start") }
+                    )
+                    NavigationBarItem(
+                        selected = tab == AppTab.ALL,
+                        onClick = { tab = AppTab.ALL },
+                        icon = { Icon(Icons.Rounded.Radio, null) },
+                        label = { Text("Stacje") }
+                    )
+                    NavigationBarItem(
+                        selected = tab == AppTab.FAVORITES,
+                        onClick = { tab = AppTab.FAVORITES },
+                        icon = { Icon(Icons.Rounded.Favorite, null) },
+                        label = { Text("Ulubione") }
+                    )
+                }
+            }
+        }
     ) { padding ->
-        AnimatedContent(tab, label = "tab") { activeTab ->
-            when (activeTab) {
+        if (details != null) {
+            PlayerDetailsScreen(
+                modifier = Modifier.padding(padding),
+                station = details,
+                isCurrent = details.id == currentId,
+                isPlaying = isPlaying,
+                isBuffering = isBuffering,
+                liveTitle = if (details.id == currentId) liveTitle else null,
+                liveArtist = if (details.id == currentId) liveArtist else null,
+                history = remember(details.id, historyVersion) { library.trackHistory(details.id) },
+                favorite = details.id in favorites,
+                onPlayPause = {
+                    if (details.id != currentId) play(controller, repository, details)
+                    else if (controller?.isPlaying == true) controller.pause() else controller?.play()
+                },
+                onFavorite = { library.toggleFavorite(details.id); favoriteVersion++ }
+            )
+        } else {
+            when (tab) {
                 AppTab.HOME -> HomeScreen(
                     modifier = Modifier.padding(padding),
-                    stations = stations,
-                    categories = categories,
-                    selectedCategory = selectedCategory,
-                    onCategory = { selectedCategory = if (selectedCategory == it) null else it },
-                    current = currentStation,
+                    catalog = catalog.stations,
+                    current = current,
                     isPlaying = isPlaying,
-                    favoriteIds = favorites,
-                    onPlayPause = {
-                        if (controller?.isPlaying == true) controller.pause() else controller?.play()
+                    liveTitle = liveTitle,
+                    favorites = favorites,
+                    error = catalog.error,
+                    onStation = {
+                        play(controller, repository, it)
+                        detailsId = it.id
                     },
-                    onStation = { station -> play(controller, station) },
-                    onFavorite = { id -> userLibrary.toggleFavorite(id); favoriteRefresh++ },
+                    onDetails = { current?.let { detailsId = it.id } }
                 )
-                AppTab.FAVORITES -> StationListScreen(
+                AppTab.ALL -> AllStationsScreen(
+                    modifier = Modifier.padding(padding),
+                    stations = catalog.stations,
+                    favorites = favorites,
+                    onStation = {
+                        play(controller, repository, it)
+                        detailsId = it.id
+                    },
+                    onFavorite = { library.toggleFavorite(it); favoriteVersion++ }
+                )
+                AppTab.FAVORITES -> StationsList(
                     modifier = Modifier.padding(padding),
                     title = "Ulubione",
                     subtitle = "Twoje zapisane stacje",
-                    stations = stations.filter { it.id in favorites },
-                    currentId = currentMediaId,
-                    favoriteIds = favorites,
-                    onStation = { play(controller, it) },
-                    onFavorite = { id -> userLibrary.toggleFavorite(id); favoriteRefresh++ },
-                    searchEnabled = false,
-                )
-                AppTab.ALL -> StationListScreen(
-                    modifier = Modifier.padding(padding),
-                    title = "Wszystkie stacje",
-                    subtitle = "Wybierz radio i słuchaj",
-                    stations = stations,
-                    currentId = currentMediaId,
-                    favoriteIds = favorites,
-                    onStation = { play(controller, it) },
-                    onFavorite = { id -> userLibrary.toggleFavorite(id); favoriteRefresh++ },
-                    searchEnabled = true,
+                    stations = catalog.stations.filter { it.id in favorites },
+                    favorites = favorites,
+                    onStation = {
+                        play(controller, repository, it)
+                        detailsId = it.id
+                    },
+                    onFavorite = { library.toggleFavorite(it); favoriteVersion++ }
                 )
             }
         }
     }
 }
 
-private fun play(controller: MediaController?, station: Station) {
+private fun play(controller: MediaController?, repository: StationRepository, station: Station) {
     controller ?: return
+    repository.trackClick(station.id)
     controller.setMediaItem(station.toMediaItem())
     controller.prepare()
     controller.play()
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun RadioTopBar() {
-    TopAppBar(
-        title = {
-            Column {
-                Text("RadioDrive", fontWeight = FontWeight.Black, letterSpacing = 0.2.sp)
-                Text("radio • telefon • Android Auto", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        },
-        actions = {
-            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceVariant) {
-                Icon(Icons.Rounded.DirectionsCar, null, Modifier.padding(10.dp), tint = RadioAmber)
-            }
-            Spacer(Modifier.width(16.dp))
-        },
-    )
-}
-
 @Composable
 private fun HomeScreen(
     modifier: Modifier,
-    stations: List<Station>,
-    categories: List<String>,
-    selectedCategory: String?,
+    catalog: List<Station>,
     current: Station?,
     isPlaying: Boolean,
-    favoriteIds: Set<String>,
-    onCategory: (String) -> Unit,
-    onPlayPause: () -> Unit,
+    liveTitle: String?,
+    favorites: Set<String>,
+    error: String?,
+    onStation: (Station) -> Unit,
+    onDetails: () -> Unit,
+) {
+    val popular = remember(catalog) { catalog.take(24) }
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        item {
+            NowPlayingHero(current, isPlaying, liveTitle, onDetails)
+        }
+        if (error != null) {
+            item {
+                Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.errorContainer) {
+                    Text(error, Modifier.padding(14.dp), color = MaterialTheme.colorScheme.onErrorContainer)
+                }
+            }
+        }
+        item {
+            Text("Najpopularniejsze w Polsce", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+            Text("Aktywne strumienie posortowane według popularności katalogu", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        items(popular, key = { it.id }) { station ->
+            StationRow(station, station.id == current?.id, station.id in favorites, onClick = { onStation(station) }, onFavorite = null)
+        }
+    }
+}
+
+@Composable
+private fun NowPlayingHero(current: Station?, isPlaying: Boolean, liveTitle: String?, onDetails: () -> Unit) {
+    val gradient = Brush.linearGradient(listOf(Color(0xFF342100), Color(0xFF073B36), RadioSurface2))
+    Surface(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(30.dp)).clickable(enabled = current != null, onClick = onDetails),
+        shape = RoundedCornerShape(30.dp),
+        color = Color.Transparent
+    ) {
+        Column(Modifier.background(gradient).padding(20.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                StationLogo(current, 82.dp)
+                Spacer(Modifier.width(16.dp))
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Surface(shape = CircleShape, color = if (isPlaying) RadioCyan.copy(alpha = .18f) else Color.White.copy(alpha = .08f)) {
+                            Text(if (isPlaying) "  LIVE  " else "  GOTOWE  ", Modifier.padding(vertical = 5.dp), color = if (isPlaying) RadioCyan else Color.White, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(current?.name ?: "Wybierz stację", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(liveTitle ?: current?.subtitle ?: "Pełny katalog polskiego radia", maxLines = 2, overflow = TextOverflow.Ellipsis, color = Color.White.copy(alpha = .75f))
+                }
+                Icon(Icons.Rounded.ChevronRight, null, tint = Color.White.copy(alpha = .7f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun AllStationsScreen(
+    modifier: Modifier,
+    stations: List<Station>,
+    favorites: Set<String>,
     onStation: (Station) -> Unit,
     onFavorite: (String) -> Unit,
 ) {
-    val visible = if (selectedCategory == null) stations else stations.filter { it.category == selectedCategory }
+    var query by rememberSaveable { mutableStateOf("") }
+    var category by rememberSaveable { mutableStateOf<String?>(null) }
+    val categories = remember(stations) { stations.map { it.category }.distinct().sorted() }
+    val filtered = remember(stations, query, category) {
+        stations.filter { s ->
+            (category == null || s.category == category) &&
+                (query.isBlank() ||
+                    s.name.contains(query, true) ||
+                    s.state.contains(query, true) ||
+                    s.tags.any { it.contains(query, true) })
+        }
+    }
+
     LazyColumn(
         modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         item {
-            NowPlayingCard(current = current, isPlaying = isPlaying, onPlayPause = onPlayPause)
-        }
-        item {
-            Text("Kategorie", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text("Wszystkie stacje", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
+            Text("${filtered.size} z ${stations.size} aktywnych stacji", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                shape = RoundedCornerShape(18.dp),
+                leadingIcon = { Icon(Icons.Rounded.Search, null) },
+                placeholder = { Text("Nazwa, miasto, region lub gatunek") }
+            )
             Spacer(Modifier.height(10.dp))
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(categories) { category ->
-                    FilterChip(
-                        selected = selectedCategory == category,
-                        onClick = { onCategory(category) },
-                        label = { Text(category) },
-                        leadingIcon = { Icon(Icons.Rounded.GraphicEq, null, Modifier.size(18.dp)) },
-                    )
+                item {
+                    FilterChip(selected = category == null, onClick = { category = null }, label = { Text("Wszystkie") })
+                }
+                items(categories) { c ->
+                    FilterChip(selected = category == c, onClick = { category = if (category == c) null else c }, label = { Text(c) })
                 }
             }
         }
-        item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(if (selectedCategory == null) "Polecane stacje" else selectedCategory, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text("Dotknij stacji, aby rozpocząć odtwarzanie", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                AssistChip(onClick = {}, label = { Text("${visible.size}") })
-            }
-        }
-        items(visible, key = { it.id }) { station ->
-            StationRow(
-                station = station,
-                active = current?.id == station.id,
-                favorite = station.id in favoriteIds,
-                onClick = { onStation(station) },
-                onFavorite = { onFavorite(station.id) },
-            )
-        }
-        item { Spacer(Modifier.height(8.dp)) }
-    }
-}
-
-@Composable
-private fun NowPlayingCard(current: Station?, isPlaying: Boolean, onPlayPause: () -> Unit) {
-    val gradient = Brush.linearGradient(listOf(Color(0xFF342100), Color(0xFF102B2A), RadioSurface2))
-    Surface(
-        shape = RoundedCornerShape(30.dp),
-        color = Color.Transparent,
-        tonalElevation = 2.dp,
-    ) {
-        Column(
-            Modifier
-                .background(gradient)
-                .padding(22.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(shape = RoundedCornerShape(22.dp), color = Color.White.copy(alpha = 0.08f)) {
-                    Box(Modifier.size(76.dp), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Rounded.Radio, null, Modifier.size(38.dp), tint = RadioAmber)
-                    }
-                }
-                Spacer(Modifier.width(16.dp))
-                Column(Modifier.weight(1f)) {
-                    Text("TERAZ GRA", style = MaterialTheme.typography.labelMedium, color = RadioCyan, fontWeight = FontWeight.Bold)
-                    Text(current?.name ?: "Wybierz stację", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(current?.subtitle ?: "Radio internetowe gotowe do drogi", style = MaterialTheme.typography.bodyMedium, color = Color.White.copy(alpha = 0.72f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-                FilledIconButton(
-                    onClick = onPlayPause,
-                    enabled = current != null,
-                    modifier = Modifier.size(56.dp),
-                    colors = IconButtonDefaults.filledIconButtonColors(containerColor = RadioAmber, contentColor = Color(0xFF1D1300)),
-                ) {
-                    Icon(if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, null, Modifier.size(30.dp))
-                }
-            }
-            Spacer(Modifier.height(18.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.Bottom) {
-                listOf(10, 18, 28, 16, 24, 12, 20, 30, 18, 12).forEachIndexed { index, height ->
-                    Box(
-                        Modifier
-                            .width(5.dp)
-                            .height(height.dp)
-                            .clip(CircleShape)
-                            .background(if (index % 3 == 0) RadioAmber else Color.White.copy(alpha = 0.38f))
-                    )
-                }
-                Spacer(Modifier.weight(1f))
-                Icon(Icons.Rounded.DirectionsCar, null, tint = Color.White.copy(alpha = 0.6f))
-                Text("Android Auto", style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.72f))
-            }
+        items(filtered, key = { it.id }) { station ->
+            StationRow(station, false, station.id in favorites, onClick = { onStation(station) }, onFavorite = { onFavorite(station.id) })
         }
     }
 }
 
 @Composable
-private fun StationListScreen(
+private fun StationsList(
     modifier: Modifier,
     title: String,
     subtitle: String,
     stations: List<Station>,
-    currentId: String?,
-    favoriteIds: Set<String>,
+    favorites: Set<String>,
     onStation: (Station) -> Unit,
     onFavorite: (String) -> Unit,
-    searchEnabled: Boolean,
 ) {
-    var query by rememberSaveable { mutableStateOf("") }
-    val visibleStations = if (query.isBlank()) stations else stations.filter { station ->
-        station.name.contains(query, ignoreCase = true) ||
-            station.subtitle.contains(query, ignoreCase = true) ||
-            station.category.contains(query, ignoreCase = true)
-    }
-
-    LazyColumn(
-        modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
+    LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
             Text(title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
             Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(8.dp))
-            if (searchEnabled) {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    shape = RoundedCornerShape(18.dp),
-                    leadingIcon = { Icon(Icons.Rounded.Search, null) },
-                    placeholder = { Text("Szukaj stacji lub kategorii") },
-                )
-                Spacer(Modifier.height(4.dp))
+        }
+        if (stations.isEmpty()) item {
+            Surface(shape = RoundedCornerShape(22.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+                Text("Nie masz jeszcze zapisanych stacji.", Modifier.padding(20.dp))
             }
         }
-        if (visibleStations.isEmpty()) {
-            item {
-                Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
-                    Row(Modifier.padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Rounded.FavoriteBorder, null, tint = RadioAmber)
-                        Spacer(Modifier.width(12.dp))
-                        Text(if (searchEnabled && query.isNotBlank()) "Brak stacji pasujących do wyszukiwania." else "Tutaj pojawią się zapisane stacje.")
-                    }
-                }
-            }
-        }
-        items(visibleStations, key = { it.id }) { station ->
-            StationRow(
-                station = station,
-                active = currentId == station.id,
-                favorite = station.id in favoriteIds,
-                onClick = { onStation(station) },
-                onFavorite = { onFavorite(station.id) },
-            )
+        items(stations, key = { it.id }) { station ->
+            StationRow(station, false, station.id in favorites, { onStation(station) }, { onFavorite(station.id) })
         }
     }
 }
@@ -386,37 +418,193 @@ private fun StationRow(
     active: Boolean,
     favorite: Boolean,
     onClick: () -> Unit,
-    onFavorite: () -> Unit,
+    onFavorite: (() -> Unit)?,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).clickable(onClick = onClick),
         shape = RoundedCornerShape(22.dp),
-        color = if (active) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f) else MaterialTheme.colorScheme.surface,
-        tonalElevation = if (active) 3.dp else 1.dp,
+        color = if (active) MaterialTheme.colorScheme.primary.copy(alpha = .10f) else MaterialTheme.colorScheme.surface,
+        tonalElevation = 1.dp
     ) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Surface(
-                shape = RoundedCornerShape(18.dp),
-                color = if (active) RadioAmber else MaterialTheme.colorScheme.surfaceVariant,
-            ) {
-                Box(Modifier.size(58.dp), contentAlignment = Alignment.Center) {
-                    Text(station.name.take(2).uppercase(), fontWeight = FontWeight.Black, color = if (active) Color(0xFF1D1300) else MaterialTheme.colorScheme.onSurface)
-                }
-            }
-            Spacer(Modifier.width(14.dp))
+        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            StationLogo(station, 62.dp)
+            Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (active) {
-                        Icon(Icons.Rounded.GraphicEq, null, tint = RadioCyan, modifier = Modifier.size(18.dp))
+                    if (station.lastCheckOk) {
+                        Box(Modifier.size(7.dp).clip(CircleShape).background(RadioCyan))
                         Spacer(Modifier.width(6.dp))
                     }
                     Text(station.name, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                Text(station.subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(station.category, style = MaterialTheme.typography.labelSmall, color = RadioAmber)
+                Text(station.subtitle.ifBlank { "Polska • ${station.category}" }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(buildString {
+                    if (station.codec.isNotBlank()) append(station.codec)
+                    if (station.bitrate > 0) {
+                        if (isNotEmpty()) append(" • ")
+                        append("${station.bitrate} kb/s")
+                    }
+                    if (station.hls) append(" • HLS")
+                }, style = MaterialTheme.typography.labelSmall, color = RadioAmber)
             }
-            IconButton(onClick = onFavorite) {
+            if (onFavorite != null) IconButton(onClick = onFavorite) {
                 Icon(if (favorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder, null, tint = if (favorite) RadioAmber else MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlayerDetailsScreen(
+    modifier: Modifier,
+    station: Station,
+    isCurrent: Boolean,
+    isPlaying: Boolean,
+    isBuffering: Boolean,
+    liveTitle: String?,
+    liveArtist: String?,
+    history: List<String>,
+    favorite: Boolean,
+    onPlayPause: () -> Unit,
+    onFavorite: () -> Unit,
+) {
+    val context = LocalContext.current
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(18.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        item {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                StationLogo(station, 150.dp)
+                Spacer(Modifier.height(14.dp))
+                Surface(shape = CircleShape, color = RadioCyan.copy(alpha = .14f)) {
+                    Text(if (isBuffering) "  BUFOROWANIE  " else if (isCurrent && isPlaying) "  LIVE  " else "  ONLINE  ", Modifier.padding(vertical = 6.dp), color = RadioCyan, fontWeight = FontWeight.Black)
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(station.name, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
+                Text(station.subtitle.ifBlank { "Polska" }, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(16.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    FilledIconButton(onClick = onPlayPause, modifier = Modifier.size(64.dp), colors = IconButtonDefaults.filledIconButtonColors(containerColor = RadioAmber, contentColor = Color(0xFF201400))) {
+                        Icon(if (isCurrent && isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, null, Modifier.size(34.dp))
+                    }
+                    FilledTonalIconButton(onClick = onFavorite, modifier = Modifier.size(64.dp)) {
+                        Icon(if (favorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder, null, tint = if (favorite) RadioAmber else MaterialTheme.colorScheme.onSurface)
+                    }
+                    if (station.homepage != null) FilledTonalIconButton(
+                        onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(station.homepage))) } },
+                        modifier = Modifier.size(64.dp)
+                    ) { Icon(Icons.Rounded.Language, "Strona stacji") }
+                }
+            }
+        }
+
+        item {
+            InfoPanel(
+                icon = Icons.Rounded.GraphicEq,
+                title = "TERAZ GRAMY",
+                main = liveTitle ?: "Stacja nie przekazuje tytułu audycji/utworu",
+                secondary = liveArtist ?: "RadioDrive pokaże metadane automatycznie, gdy pojawią się w strumieniu.",
+                accent = true
+            )
+        }
+
+        item {
+            InfoPanel(
+                icon = Icons.Rounded.SkipNext,
+                title = "NASTĘPNY",
+                main = "Dane zależne od nadawcy",
+                secondary = "Przyszły utwór lub program nie jest częścią standardowego strumienia radia. Pole uzupełnia się tylko dla stacji udostępniających ramówkę/EPG.",
+                accent = false
+            )
+        }
+
+        item {
+            Text("Informacje o transmisji", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+            Spacer(Modifier.height(8.dp))
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                item { DataChip("Jakość", station.streamQuality) }
+                if (station.codec.isNotBlank()) item { DataChip("Kodek", station.codec) }
+                if (station.bitrate > 0) item { DataChip("Bitrate", "${station.bitrate} kb/s") }
+                item { DataChip("Tryb", if (station.hls) "HLS" else "Live stream") }
+                if (station.state.isNotBlank()) item { DataChip("Region", station.state) }
+            }
+        }
+
+        if (station.tags.isNotEmpty()) item {
+            Text("Gatunki i tagi", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(station.tags) { tag -> AssistChip(onClick = {}, label = { Text(tag) }) }
+            }
+        }
+
+        if (history.isNotEmpty()) item {
+            Text("Ostatnio na antenie", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
+            Text("Historia metadanych zapisana przez RadioDrive", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(8.dp))
+            history.take(8).forEachIndexed { index, item ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("${index + 1}", color = RadioAmber, fontWeight = FontWeight.Black, modifier = Modifier.width(28.dp))
+                    Text(item, modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+                HorizontalDivider()
+            }
+        }
+    }
+}
+
+@Composable
+private fun InfoPanel(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    main: String,
+    secondary: String,
+    accent: Boolean,
+) {
+    Surface(
+        shape = RoundedCornerShape(24.dp),
+        color = if (accent) RadioCyan.copy(alpha = .09f) else MaterialTheme.colorScheme.surfaceVariant
+    ) {
+        Row(Modifier.padding(18.dp), verticalAlignment = Alignment.Top) {
+            Surface(shape = CircleShape, color = if (accent) RadioCyan.copy(alpha = .16f) else MaterialTheme.colorScheme.surface) {
+                Icon(icon, null, Modifier.padding(10.dp), tint = if (accent) RadioCyan else RadioAmber)
+            }
+            Spacer(Modifier.width(14.dp))
+            Column {
+                Text(title, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Black, color = if (accent) RadioCyan else RadioAmber)
+                Text(main, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(4.dp))
+                Text(secondary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@Composable
+private fun DataChip(label: String, value: String) {
+    Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+            Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(value, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+private fun StationLogo(station: Station?, size: androidx.compose.ui.unit.Dp) {
+    Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+        Box(Modifier.size(size), contentAlignment = Alignment.Center) {
+            if (!station?.logoUrl.isNullOrBlank()) {
+                AsyncImage(
+                    model = station?.logoUrl,
+                    contentDescription = station?.name,
+                    modifier = Modifier.fillMaxSize().padding(7.dp).clip(RoundedCornerShape(18.dp)),
+                    contentScale = ContentScale.Fit
+                )
+            } else {
+                Text(station?.name?.take(2)?.uppercase() ?: "RD", fontWeight = FontWeight.Black, color = RadioAmber)
             }
         }
     }

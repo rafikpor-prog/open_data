@@ -1,43 +1,106 @@
 package pl.radiodrive.app.data
 
 import android.content.Context
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import pl.radiodrive.app.model.Station
-import org.json.JSONArray
+import java.io.File
 
-class StationRepository(private val context: Context) {
-    private val stations: List<Station> by lazy { loadStations() }
+data class CatalogState(
+    val stations: List<Station> = emptyList(),
+    val isLoading: Boolean = false,
+    val error: String? = null,
+    val source: String = "cache",
+)
 
-    fun all(): List<Station> = stations
-    fun find(id: String): Station? = stations.firstOrNull { it.id == id }
-    fun categories(): List<String> = stations.map { it.category }.distinct().sorted()
-    fun inCategory(category: String): List<Station> = stations.filter { it.category == category }
-    fun search(query: String): List<Station> {
-        val q = query.trim().lowercase()
-        if (q.isBlank()) return emptyList()
-        return stations.filter {
-            it.name.lowercase().contains(q) ||
-                it.subtitle.lowercase().contains(q) ||
-                it.category.lowercase().contains(q)
+class StationRepository private constructor(private val context: Context) {
+    private val client = RadioBrowserClient()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val cacheFile = File(context.filesDir, "radiodrive_stations_pl.json")
+
+    private val initial = loadCached().ifEmpty { loadFallback() }
+    private val _state = MutableStateFlow(CatalogState(stations = initial))
+    val state: StateFlow<CatalogState> = _state.asStateFlow()
+
+    init { refresh() }
+
+    fun all(): List<Station> = _state.value.stations
+
+    fun find(id: String): Station? = all().firstOrNull { it.id == id }
+
+    fun categories(): List<String> = all().map { it.category }.distinct().sorted()
+
+    fun regions(): List<String> = all().map { it.state }.filter { it.isNotBlank() }.distinct().sorted()
+
+    fun refresh() {
+        if (_state.value.isLoading) return
+        _state.update { it.copy(isLoading = true, error = null) }
+        scope.launch {
+            runCatching {
+                val raw = client.fetchPolishStationsRaw()
+                val parsed = client.parseStations(raw)
+                require(parsed.isNotEmpty()) { "Katalog nie zwrócił aktywnych stacji" }
+                cacheFile.writeText(raw, Charsets.UTF_8)
+                parsed
+            }.onSuccess { stations ->
+                _state.value = CatalogState(
+                    stations = stations,
+                    isLoading = false,
+                    error = null,
+                    source = "Radio Browser • Polska",
+                )
+            }.onFailure { error ->
+                _state.update {
+                    it.copy(
+                        isLoading = false,
+                        error = "Nie udało się odświeżyć katalogu: ${error.message ?: "błąd sieci"}",
+                    )
+                }
+            }
         }
     }
 
-    private fun loadStations(): List<Station> {
+    fun trackClick(stationId: String) {
+        scope.launch { runCatching { client.registerClick(stationId) } }
+    }
+
+    private fun loadCached(): List<Station> = runCatching {
+        if (!cacheFile.exists()) emptyList()
+        else client.parseStations(cacheFile.readText(Charsets.UTF_8))
+    }.getOrDefault(emptyList())
+
+    private fun loadFallback(): List<Station> = runCatching {
         val raw = context.assets.open("stations.json").bufferedReader().use { it.readText() }
-        val array = JSONArray(raw)
-        return buildList {
-            for (i in 0 until array.length()) {
-                val o = array.getJSONObject(i)
+        val legacy = org.json.JSONArray(raw)
+        buildList {
+            for (i in 0 until legacy.length()) {
+                val o = legacy.getJSONObject(i)
                 add(
                     Station(
                         id = o.getString("id"),
                         name = o.getString("name"),
-                        subtitle = o.optString("subtitle"),
                         streamUrl = o.getString("streamUrl"),
-                        category = o.optString("category", "Inne"),
                         logoUrl = if (o.isNull("logoUrl")) null else o.optString("logoUrl").takeIf { it.isNotBlank() },
+                        category = o.optString("category", "Różne"),
+                        tags = listOf(o.optString("category", "Różne")),
                     )
                 )
             }
         }
+    }.getOrDefault(emptyList())
+
+    companion object {
+        @Volatile private var INSTANCE: StationRepository? = null
+
+        fun get(context: Context): StationRepository =
+            INSTANCE ?: synchronized(this) {
+                INSTANCE ?: StationRepository(context.applicationContext).also { INSTANCE = it }
+            }
     }
 }

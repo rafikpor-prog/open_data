@@ -10,8 +10,6 @@ import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
 import androidx.media3.session.SessionError
-import androidx.media3.session.MediaLibraryService.LibraryParams
-import androidx.media3.session.MediaLibraryService.MediaLibrarySession
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
@@ -25,30 +23,25 @@ class RadioPlaybackService : MediaLibraryService() {
     private lateinit var player: ExoPlayer
     private lateinit var session: MediaLibrarySession
     private lateinit var repository: StationRepository
-    private lateinit var userLibrary: UserLibrary
+    private lateinit var library: UserLibrary
 
     override fun onCreate() {
         super.onCreate()
-        repository = StationRepository(this)
-        userLibrary = UserLibrary(this)
+        repository = StationRepository.get(this)
+        library = UserLibrary(this)
         player = ExoPlayer.Builder(this).build()
-
         player.addListener(object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                mediaItem?.mediaId?.takeIf { repository.find(it) != null }?.let(userLibrary::rememberRecent)
+                mediaItem?.mediaId?.takeIf { it.isNotBlank() }?.let(library::rememberRecent)
             }
         })
 
-        val intent = Intent(this, MainActivity::class.java)
-        val pendingIntent = PendingIntent.getActivity(
-            this,
-            0,
-            intent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        val pending = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-
-        session = MediaLibrarySession.Builder(this, player, LibraryCallback())
-            .setSessionActivity(pendingIntent)
+        session = MediaLibrarySession.Builder(this, player, Callback())
+            .setSessionActivity(pending)
             .build()
     }
 
@@ -60,26 +53,13 @@ class RadioPlaybackService : MediaLibraryService() {
         super.onDestroy()
     }
 
-    private inner class LibraryCallback : MediaLibrarySession.Callback {
+    private inner class Callback : MediaLibrarySession.Callback {
         override fun onGetLibraryRoot(
             session: MediaLibrarySession,
             browser: MediaSession.ControllerInfo,
-            params: LibraryParams?,
+            params: LibraryParams?
         ): ListenableFuture<LibraryResult<MediaItem>> =
-            Futures.immediateFuture(LibraryResult.ofItem(rootItem(), params))
-
-        override fun onGetItem(
-            session: MediaLibrarySession,
-            browser: MediaSession.ControllerInfo,
-            mediaId: String,
-        ): ListenableFuture<LibraryResult<MediaItem>> {
-            val item = resolveItem(mediaId)
-            return if (item != null) {
-                Futures.immediateFuture(LibraryResult.ofItem(item, null))
-            } else {
-                Futures.immediateFuture(LibraryResult.ofError(SessionError.ERROR_BAD_VALUE))
-            }
-        }
+            Futures.immediateFuture(LibraryResult.ofItem(browsable(ROOT, "RadioDrive Polska", "Aktywne polskie stacje"), params))
 
         override fun onGetChildren(
             session: MediaLibrarySession,
@@ -87,43 +67,44 @@ class RadioPlaybackService : MediaLibraryService() {
             parentId: String,
             page: Int,
             pageSize: Int,
-            params: LibraryParams?,
+            params: LibraryParams?
         ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
+            val all = repository.all()
             val items = when {
-                parentId == ROOT_ID -> rootChildren()
-                parentId == ALL_ID -> repository.all().map(Station::toMediaItem)
-                parentId == FAVORITES_ID -> userLibrary.favorites().mapNotNull(repository::find).map(Station::toMediaItem)
-                parentId == RECENT_ID -> userLibrary.recent().mapNotNull(repository::find).map(Station::toMediaItem)
-                parentId.startsWith(CATEGORY_PREFIX) -> {
-                    val category = parentId.removePrefix(CATEGORY_PREFIX)
-                    repository.inCategory(category).map(Station::toMediaItem)
+                parentId == ROOT -> buildList {
+                    add(browsable(FAVORITES, "Ulubione", "Twoje zapisane stacje"))
+                    add(browsable(RECENT, "Ostatnio słuchane", "Historia odtwarzania"))
+                    add(browsable(ALL, "Wszystkie polskie stacje", "${all.size} aktywnych pozycji"))
+                    repository.categories().forEach { add(browsable("cat:$it", it, "Kategoria")) }
                 }
+                parentId == ALL -> all.map(Station::toMediaItem)
+                parentId == FAVORITES -> library.favorites().mapNotNull(repository::find).map(Station::toMediaItem)
+                parentId == RECENT -> library.recent().mapNotNull(repository::find).map(Station::toMediaItem)
+                parentId.startsWith("cat:") -> all.filter { it.category == parentId.removePrefix("cat:") }.map(Station::toMediaItem)
                 else -> emptyList()
             }
-
             val from = (page * pageSize).coerceAtMost(items.size)
             val to = (from + pageSize).coerceAtMost(items.size)
             return Futures.immediateFuture(LibraryResult.ofItemList(items.subList(from, to), params))
         }
 
-        override fun onAddMediaItems(
-            mediaSession: MediaSession,
-            controller: MediaSession.ControllerInfo,
-            mediaItems: List<MediaItem>,
-        ): ListenableFuture<List<MediaItem>> {
-            val resolved = mediaItems.mapNotNull { requested ->
-                repository.find(requested.mediaId)?.toMediaItem() ?: requested
-            }
-            return Futures.immediateFuture(resolved)
+        override fun onGetItem(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            mediaId: String
+        ): ListenableFuture<LibraryResult<MediaItem>> {
+            val item = repository.find(mediaId)?.toMediaItem()
+            return if (item != null) Futures.immediateFuture(LibraryResult.ofItem(item, null))
+            else Futures.immediateFuture(LibraryResult.ofError(SessionError.ERROR_BAD_VALUE))
         }
 
         override fun onSearch(
             session: MediaLibrarySession,
             browser: MediaSession.ControllerInfo,
             query: String,
-            params: LibraryParams?,
+            params: LibraryParams?
         ): ListenableFuture<LibraryResult<Void>> {
-            val count = repository.search(query).size
+            val count = search(query).size
             session.notifySearchResultChanged(browser, query, count, params)
             return Futures.immediateFuture(LibraryResult.ofVoid())
         }
@@ -134,36 +115,34 @@ class RadioPlaybackService : MediaLibraryService() {
             query: String,
             page: Int,
             pageSize: Int,
-            params: LibraryParams?,
+            params: LibraryParams?
         ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
-            val found = repository.search(query).map(Station::toMediaItem)
+            val found = search(query).map(Station::toMediaItem)
             val from = (page * pageSize).coerceAtMost(found.size)
             val to = (from + pageSize).coerceAtMost(found.size)
             return Futures.immediateFuture(LibraryResult.ofItemList(found.subList(from, to), params))
         }
+
+        override fun onAddMediaItems(
+            mediaSession: MediaSession,
+            controller: MediaSession.ControllerInfo,
+            mediaItems: List<MediaItem>
+        ): ListenableFuture<List<MediaItem>> =
+            Futures.immediateFuture(mediaItems.map { repository.find(it.mediaId)?.toMediaItem() ?: it })
     }
 
-    private fun rootItem() = browsable(ROOT_ID, "RadioDrive", "Radio internetowe")
-
-    private fun rootChildren(): List<MediaItem> = buildList {
-        add(browsable(FAVORITES_ID, "Ulubione", "Twoje zapisane stacje"))
-        add(browsable(RECENT_ID, "Ostatnio słuchane", "Szybki powrót do stacji"))
-        add(browsable(ALL_ID, "Wszystkie stacje", "Pełna lista"))
-        repository.categories().forEach { category ->
-            add(browsable(CATEGORY_PREFIX + category, category, "Kategoria"))
+    private fun search(q: String): List<Station> {
+        val query = q.trim()
+        if (query.isBlank()) return emptyList()
+        return repository.all().filter {
+            it.name.contains(query, true) ||
+                it.state.contains(query, true) ||
+                it.category.contains(query, true) ||
+                it.tags.any { tag -> tag.contains(query, true) }
         }
     }
 
-    private fun resolveItem(id: String): MediaItem? = when {
-        id == ROOT_ID -> rootItem()
-        id == ALL_ID -> browsable(ALL_ID, "Wszystkie stacje", "Pełna lista")
-        id == FAVORITES_ID -> browsable(FAVORITES_ID, "Ulubione", "Twoje zapisane stacje")
-        id == RECENT_ID -> browsable(RECENT_ID, "Ostatnio słuchane", "Szybki powrót")
-        id.startsWith(CATEGORY_PREFIX) -> browsable(id, id.removePrefix(CATEGORY_PREFIX), "Kategoria")
-        else -> repository.find(id)?.toMediaItem()
-    }
-
-    private fun browsable(id: String, title: String, subtitle: String): MediaItem =
+    private fun browsable(id: String, title: String, subtitle: String) =
         MediaItem.Builder()
             .setMediaId(id)
             .setMediaMetadata(
@@ -173,14 +152,12 @@ class RadioPlaybackService : MediaLibraryService() {
                     .setIsBrowsable(true)
                     .setIsPlayable(false)
                     .build()
-            )
-            .build()
+            ).build()
 
     companion object {
-        private const val ROOT_ID = "root"
-        private const val ALL_ID = "all"
-        private const val FAVORITES_ID = "favorites"
-        private const val RECENT_ID = "recent"
-        private const val CATEGORY_PREFIX = "category:"
+        private const val ROOT = "root"
+        private const val ALL = "all"
+        private const val FAVORITES = "favorites"
+        private const val RECENT = "recent"
     }
 }
