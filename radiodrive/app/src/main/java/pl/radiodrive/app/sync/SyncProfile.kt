@@ -32,11 +32,12 @@ object SyncClock {
 object SyncProfileStore {
     private const val STATION_PREFS = "station_overrides"
     private const val CUSTOM_PREFS = "custom_stations"
+    private const val HIDDEN_PREFS = "hidden_stations"
     private const val LIBRARY_PREFS = "radio_library"
 
     fun export(context: Context): JSONObject {
         val root = JSONObject()
-            .put("schema", 1)
+            .put("schema", 2)
             .put("updatedAt", SyncClock.updatedAt(context))
 
         val stationPrefs = context.getSharedPreferences(STATION_PREFS, Context.MODE_PRIVATE)
@@ -53,6 +54,11 @@ object SyncProfileStore {
 
         val custom = context.getSharedPreferences(CUSTOM_PREFS, Context.MODE_PRIVATE)
         root.put("customStations", custom.getString("items", "[]") ?: "[]")
+
+        val hidden = context.getSharedPreferences(HIDDEN_PREFS, Context.MODE_PRIVATE)
+        val hiddenArray = JSONArray()
+        hidden.getStringSet("ids", emptySet()).orEmpty().sorted().forEach(hiddenArray::put)
+        root.put("hiddenStations", hiddenArray)
 
         val library = context.getSharedPreferences(LIBRARY_PREFS, Context.MODE_PRIVATE)
         val libraryJson = JSONObject()
@@ -90,6 +96,15 @@ object SyncProfileStore {
         val customPrefs = context.getSharedPreferences(CUSTOM_PREFS, Context.MODE_PRIVATE)
         val customRaw = root.optString("customStations", "[]")
         customPrefs.edit().putString("items", customRaw).apply()
+
+        val hiddenPrefs = context.getSharedPreferences(HIDDEN_PREFS, Context.MODE_PRIVATE)
+        val hiddenSet = buildSet {
+            val array = root.optJSONArray("hiddenStations") ?: JSONArray()
+            for (i in 0 until array.length()) {
+                array.optString(i).takeIf { it.isNotBlank() }?.let(::add)
+            }
+        }
+        hiddenPrefs.edit().putStringSet("ids", hiddenSet).apply()
 
         val library = context.getSharedPreferences(LIBRARY_PREFS, Context.MODE_PRIVATE)
         val libraryEditor = library.edit().clear()

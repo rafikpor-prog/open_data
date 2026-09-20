@@ -168,6 +168,7 @@ private fun RadioDriveApp(controller: MediaController?) {
     val favorites = remember(favoriteVersion, syncState.revision) { library.favorites() }
     val current = catalog.stations.firstOrNull { it.id == currentId }
     val details = catalog.stations.firstOrNull { it.id == detailsId }
+    val hiddenCount = repository.hiddenCount()
 
     Scaffold(
         topBar = {
@@ -306,6 +307,11 @@ private fun RadioDriveApp(controller: MediaController?) {
                     modifier = Modifier.padding(padding),
                     stations = catalog.stations,
                     favorites = favorites,
+                    hiddenCount = hiddenCount,
+                    onRestoreHidden = {
+                        repository.restoreHiddenStations()
+                        googleSync.silentAuthorizeAndSync()
+                    },
                     onStation = {
                         play(controller, repository, it)
                         detailsId = it.id
@@ -333,7 +339,8 @@ private fun RadioDriveApp(controller: MediaController?) {
             station = station,
             title = if (repository.isCustomStation(station.id)) "Edytuj własną stację" else "Edytuj stację",
             canReset = repository.isEdited(station.id),
-            canDelete = repository.isCustomStation(station.id),
+            canDelete = true,
+            deleteLabel = if (repository.isCustomStation(station.id)) "Usuń stację" else "Usuń z listy",
             onDismiss = { editingStation = null },
             onSave = { edited ->
                 repository.saveEditedStation(edited)
@@ -353,7 +360,7 @@ private fun RadioDriveApp(controller: MediaController?) {
             onDelete = {
                 val id = station.id
                 if (id == currentId) controller?.stop()
-                repository.deleteCustomStation(id)
+                repository.removeStationFromList(id)
                 editingStation = null
                 detailsId = null
                 googleSync.silentAuthorizeAndSync()
@@ -373,6 +380,7 @@ private fun RadioDriveApp(controller: MediaController?) {
             title = "Dodaj własną stację",
             canReset = false,
             canDelete = false,
+            deleteLabel = "Usuń",
             onDismiss = { addingCustomStation = false },
             onSave = { draft ->
                 val created = repository.createCustomStation(
@@ -491,6 +499,8 @@ private fun AllStationsScreen(
     modifier: Modifier,
     stations: List<Station>,
     favorites: Set<String>,
+    hiddenCount: Int,
+    onRestoreHidden: () -> Unit,
     onStation: (Station) -> Unit,
     onFavorite: (String) -> Unit,
 ) {
@@ -508,8 +518,19 @@ private fun AllStationsScreen(
     }
 
     Column(modifier.fillMaxSize().padding(horizontal = 14.dp)) {
-        Text("Wszystkie stacje", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
-        Text("${filtered.size} z ${stations.size} aktywnych stacji", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Wszystkie stacje", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
+                Text("${filtered.size} z ${stations.size} aktywnych stacji", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (hiddenCount > 0) {
+                OutlinedButton(onClick = onRestoreHidden) {
+                    Icon(Icons.Rounded.Restore, null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Przywróć ukryte ($hiddenCount)")
+                }
+            }
+        }
         Spacer(Modifier.height(10.dp))
         OutlinedTextField(
             value = query,
@@ -1040,6 +1061,7 @@ private fun StationEditorDialog(
     title: String,
     canReset: Boolean,
     canDelete: Boolean,
+    deleteLabel: String,
     onDismiss: () -> Unit,
     onSave: (Station) -> Unit,
     onReset: () -> Unit,
@@ -1051,6 +1073,7 @@ private fun StationEditorDialog(
     var homepage by remember(station.id) { mutableStateOf(station.homepage.orEmpty()) }
     var category by remember(station.id) { mutableStateOf(station.category) }
     var state by remember(station.id) { mutableStateOf(station.state) }
+    var confirmDelete by remember(station.id) { mutableStateOf(false) }
 
     val streamOk = streamUrl.trim().startsWith("http://") || streamUrl.trim().startsWith("https://")
     val logoOk = logoUrl.isBlank() || logoUrl.trim().startsWith("http://") || logoUrl.trim().startsWith("https://")
@@ -1158,7 +1181,9 @@ private fun StationEditorDialog(
         dismissButton = {
             Row {
                 if (canDelete) {
-                    TextButton(onClick = onDelete) { Text("Usuń", color = MaterialTheme.colorScheme.error) }
+                    TextButton(onClick = { confirmDelete = true }) {
+                        Text(deleteLabel, color = MaterialTheme.colorScheme.error)
+                    }
                 }
                 if (canReset) {
                     TextButton(onClick = onReset) { Text("Przywróć dane katalogu") }
@@ -1167,4 +1192,32 @@ private fun StationEditorDialog(
             }
         }
     )
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text(if (station.id.startsWith("custom-")) "Usunąć stację?" else "Usunąć stację z listy?") },
+            text = {
+                Text(
+                    if (station.id.startsWith("custom-")) {
+                        "Własna stacja zostanie usunięta z RadioDrive. Jeśli wykonasz backup po tej zmianie, zostanie usunięta także po przywróceniu profilu na innych urządzeniach."
+                    } else {
+                        "Stacja zostanie ukryta w Twojej liście bez usuwania jej ze źródłowego katalogu. Możesz później użyć „Przywróć ukryte”."
+                    }
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        confirmDelete = false
+                        onDelete()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) { Text("Usuń") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = false }) { Text("Anuluj") }
+            }
+        )
+    }
 }

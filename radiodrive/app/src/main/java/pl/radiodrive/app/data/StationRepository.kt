@@ -23,6 +23,7 @@ class StationRepository private constructor(private val context: Context) {
     private val client = RadioBrowserClient()
     private val overrides = StationOverrides(context)
     private val customStations = CustomStations(context)
+    private val hiddenStations = HiddenStations(context)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val cacheFile = File(context.filesDir, "radiodrive_stations_pl.json")
 
@@ -118,6 +119,24 @@ class StationRepository private constructor(private val context: Context) {
         _state.update { state -> state.copy(stations = state.stations.filterNot { it.id == stationId }) }
     }
 
+    fun removeStationFromList(stationId: String) {
+        if (customStations.isCustom(stationId)) {
+            deleteCustomStation(stationId)
+        } else {
+            hiddenStations.hide(stationId)
+            _state.update { state ->
+                state.copy(stations = state.stations.filterNot { it.id == stationId })
+            }
+        }
+    }
+
+    fun hiddenCount(): Int = hiddenStations.all().size
+
+    fun restoreHiddenStations() {
+        hiddenStations.clear()
+        _state.update { state -> state.copy(stations = mergedStations()) }
+    }
+
     fun isCustomStation(stationId: String): Boolean = customStations.isCustom(stationId)
 
     fun resetEditedStation(stationId: String) {
@@ -136,8 +155,11 @@ class StationRepository private constructor(private val context: Context) {
         }
     }
 
-    private fun mergedStations(): List<Station> =
-        customStations.all() + overrides.apply(baseStations)
+    private fun mergedStations(): List<Station> {
+        val hidden = hiddenStations.all()
+        return (customStations.all() + overrides.apply(baseStations))
+            .filterNot { it.id in hidden }
+    }
 
     fun trackClick(stationId: String) {
         scope.launch { runCatching { client.registerClick(stationId) } }
