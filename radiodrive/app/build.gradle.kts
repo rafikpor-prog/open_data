@@ -5,24 +5,20 @@ plugins {
 
 android {
     namespace = "pl.radiodrive.app"
-
     compileSdk {
         version = release(37) { minorApiLevel = 0 }
     }
-
     defaultConfig {
         applicationId = "pl.radiodrive.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "2.0.0"
+        versionCode = 210
+        versionName = "2.1.0"
     }
-
     buildFeatures {
         compose = true
         buildConfig = true
     }
-
     packaging {
         resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" }
     }

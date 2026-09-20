@@ -39,8 +39,10 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import coil3.compose.AsyncImage
 import com.google.common.util.concurrent.ListenableFuture
+import pl.radiodrive.app.data.AppMigration
 import pl.radiodrive.app.data.StationRepository
 import pl.radiodrive.app.data.UserLibrary
+import pl.radiodrive.app.weather.WeatherPanel
 import pl.radiodrive.app.model.Station
 import pl.radiodrive.app.playback.RadioPlaybackService
 import pl.radiodrive.app.ui.theme.RadioAmber
@@ -51,6 +53,7 @@ import pl.radiodrive.app.ui.theme.RadioSurface2
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppMigration.run(applicationContext)
         enableEdgeToEdge()
         setContent {
             RadioDriveTheme {
@@ -153,7 +156,7 @@ private fun RadioDriveApp(controller: MediaController?) {
                     } else {
                         Column {
                             Text("RadioDrive", fontWeight = FontWeight.Black)
-                            Text("${catalog.stations.size} aktywnych polskich stacji", style = MaterialTheme.typography.labelSmall)
+                            Text("v${BuildConfig.VERSION_NAME} • ${catalog.stations.size} aktywnych polskich stacji", style = MaterialTheme.typography.labelSmall)
                         }
                     }
                 },
@@ -285,6 +288,9 @@ private fun HomeScreen(
     ) {
         item {
             NowPlayingHero(current, isPlaying, liveTitle, onDetails)
+        }
+        item {
+            WeatherPanel()
         }
         if (error != null) {
             item {

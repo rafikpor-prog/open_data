@@ -26,16 +26,22 @@ jobs:
           test -x "$SDKMANAGER"
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "platform-tools" "platforms;android-37.0" "build-tools;37.0.0"
-          echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.6.0'
-      - name: Build debug APK
+      - name: Build unsigned release APK
         working-directory: radiodrive
-        run: gradle :app:assembleDebug --stacktrace
-      - name: Upload APK
+        run: gradle :app:assembleRelease --stacktrace
+      - name: Align APK and collect signer
+        shell: bash
+        run: |
+          "$ANDROID_SDK_ROOT/build-tools/37.0.0/zipalign" -f -P 16 4             radiodrive/app/build/outputs/apk/release/app-release-unsigned.apk             RadioDrive-2.1.0-unsigned-aligned.apk
+          cp "$ANDROID_SDK_ROOT/build-tools/37.0.0/lib/apksigner.jar" apksigner.jar
+      - name: Upload unsigned release
         uses: actions/upload-artifact@v4
         with:
-          name: RadioDrive-debug
-          path: radiodrive/app/build/outputs/apk/debug/app-debug.apk
+          name: RadioDrive-2.1-release-unsigned
+          path: |
+            RadioDrive-2.1.0-unsigned-aligned.apk
+            apksigner.jar
           if-no-files-found: error
