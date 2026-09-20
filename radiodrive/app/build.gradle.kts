@@ -5,7 +5,12 @@ plugins {
 
 android {
     namespace = "pl.radiodrive.app"
-    compileSdk = 36
+
+    compileSdk {
+        version = release(37) {
+            minorApiLevel = 0
+        }
+    }
 
     defaultConfig {
         applicationId = "pl.radiodrive.app"
