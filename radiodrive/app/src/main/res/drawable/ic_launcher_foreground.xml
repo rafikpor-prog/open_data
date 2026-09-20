@@ -4,16 +4,55 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+
+    <!-- Futuristic RadioDrive mark: radio core + broadcast waves + road -->
     <path
-        android:fillColor="#FFB000"
-        android:pathData="M54,22a32,32 0,1 0,0 64a32,32 0,1 0,0 -64" />
+        android:fillColor="#0B1018"
+        android:pathData="M54,17a37,37 0,1 0,0 74a37,37 0,1 0,0 -74" />
+
     <path
-        android:fillColor="#090C11"
-        android:pathData="M40,44h28v20h-28z" />
+        android:fillColor="#14E6D3"
+        android:pathData="M54,27a27,27 0,1 0,0 54a27,27 0,1 0,0 -54" />
+
     <path
-        android:fillColor="#090C11"
-        android:pathData="M45,37h18v7h-18z" />
+        android:fillColor="#0B1018"
+        android:pathData="M54,32a22,22 0,1 0,0 44a22,22 0,1 0,0 -44" />
+
+    <!-- radio display -->
     <path
-        android:fillColor="#FFB000"
-        android:pathData="M46,49h16v4h-16zM46,56h10v4h-10z" />
+        android:fillColor="#F7B629"
+        android:pathData="M38,42h32c2.2,0 4,1.8 4,4v19c0,2.2 -1.8,4 -4,4h-32c-2.2,0 -4,-1.8 -4,-4v-19c0,-2.2 1.8,-4 4,-4z" />
+
+    <path
+        android:fillColor="#0B1018"
+        android:pathData="M40,48h18v5h-18zM40,57h13v4h-13z" />
+
+    <!-- tuning knob -->
+    <path
+        android:fillColor="#0B1018"
+        android:pathData="M65,52a4.5,4.5 0,1 0,0 9a4.5,4.5 0,1 0,0 -9" />
+
+    <!-- antenna -->
+    <path
+        android:strokeColor="#F7B629"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:fillColor="@android:color/transparent"
+        android:pathData="M61,42L70,32" />
+
+    <!-- broadcast waves -->
+    <path
+        android:strokeColor="#14E6D3"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:fillColor="@android:color/transparent"
+        android:pathData="M27,42C22,47 22,61 27,66M20,36C11,46 11,63 20,72" />
+
+    <!-- road / navigation motif -->
+    <path
+        android:fillColor="#0B1018"
+        android:pathData="M49,69h10l7,17h-24z" />
+    <path
+        android:fillColor="#F7B629"
+        android:pathData="M52,72h4l1.4,4h-6.8zM50,80h8l1.6,4h-11.2z" />
 </vector>
