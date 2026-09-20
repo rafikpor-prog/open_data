@@ -2,8 +2,9 @@ package pl.radiodrive.app.data
 
 import android.content.Context
 import org.json.JSONArray
+import pl.radiodrive.app.sync.SyncClock
 
-class UserLibrary(context: Context) {
+class UserLibrary(private val context: Context) {
     private val prefs = context.getSharedPreferences("radio_library", Context.MODE_PRIVATE)
 
     fun favorites(): Set<String> = prefs.getStringSet(KEY_FAVORITES, emptySet())?.toSet().orEmpty()
@@ -15,6 +16,7 @@ class UserLibrary(context: Context) {
             true
         }
         prefs.edit().putStringSet(KEY_FAVORITES, updated).apply()
+        SyncClock.touch(context)
         return nowFavorite
     }
 
@@ -23,6 +25,7 @@ class UserLibrary(context: Context) {
         current.remove(id)
         current.add(0, id)
         prefs.edit().putString(KEY_RECENT, current.take(MAX_RECENT).joinToString("|")).apply()
+        SyncClock.touch(context)
     }
 
     fun recent(): List<String> = prefs.getString(KEY_RECENT, "")

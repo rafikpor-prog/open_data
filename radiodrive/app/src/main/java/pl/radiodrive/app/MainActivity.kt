@@ -53,6 +53,8 @@ import pl.radiodrive.app.model.Station
 import pl.radiodrive.app.playback.RadioPlaybackService
 import pl.radiodrive.app.road.RoadAssistPanel
 import pl.radiodrive.app.stationinfo.StationWebInfoPanel
+import pl.radiodrive.app.sync.GoogleDriveSyncManager
+import pl.radiodrive.app.sync.GoogleSyncDialog
 import pl.radiodrive.app.ui.theme.RadioAmber
 import pl.radiodrive.app.ui.theme.RadioCyan
 import pl.radiodrive.app.ui.theme.RadioDriveTheme
@@ -98,6 +100,8 @@ private fun RadioDriveApp(controller: MediaController?) {
     val context = LocalContext.current
     val repository = remember { StationRepository.get(context.applicationContext) }
     val library = remember { UserLibrary(context.applicationContext) }
+    val googleSync = remember { GoogleDriveSyncManager.get(context.applicationContext) }
+    val syncState by googleSync.state.collectAsStateWithLifecycle()
     val catalog by repository.state.collectAsStateWithLifecycle()
 
     var tab by rememberSaveable { mutableStateOf(AppTab.HOME) }
@@ -111,6 +115,7 @@ private fun RadioDriveApp(controller: MediaController?) {
     var favoriteVersion by remember { mutableIntStateOf(0) }
     var historyVersion by remember { mutableIntStateOf(0) }
     var editingStation by remember { mutableStateOf<Station?>(null) }
+    var showGoogleSync by rememberSaveable { mutableStateOf(false) }
 
     DisposableEffect(controller) {
         if (controller == null) return@DisposableEffect onDispose { }
@@ -159,7 +164,7 @@ private fun RadioDriveApp(controller: MediaController?) {
         onDispose { controller.removeListener(listener) }
     }
 
-    val favorites = remember(favoriteVersion) { library.favorites() }
+    val favorites = remember(favoriteVersion, syncState.revision) { library.favorites() }
     val current = catalog.stations.firstOrNull { it.id == currentId }
     val details = catalog.stations.firstOrNull { it.id == detailsId }
 
@@ -185,6 +190,12 @@ private fun RadioDriveApp(controller: MediaController?) {
                     }
                 },
                 actions = {
+                    IconButton(onClick = { showGoogleSync = true }) {
+                        Icon(
+                            if (syncState.accountEmail != null) Icons.Rounded.CloudDone else Icons.Rounded.CloudSync,
+                            "Konto Google i synchronizacja"
+                        )
+                    }
                     if (details != null) {
                         IconButton(onClick = { editingStation = details }) {
                             Icon(Icons.Rounded.Edit, "Edytuj stację")
@@ -292,6 +303,7 @@ private fun RadioDriveApp(controller: MediaController?) {
                 repository.saveEditedStation(edited)
                 if (edited.id == currentId) play(controller, repository, edited)
                 editingStation = null
+                googleSync.silentAuthorizeAndSync()
             },
             onReset = {
                 val id = station.id
@@ -300,7 +312,15 @@ private fun RadioDriveApp(controller: MediaController?) {
                     if (id == currentId) play(controller, repository, restored)
                 }
                 editingStation = null
+                googleSync.silentAuthorizeAndSync()
             }
+        )
+    }
+
+    if (showGoogleSync) {
+        GoogleSyncDialog(
+            onDismiss = { showGoogleSync = false },
+            onSynced = { favoriteVersion++ }
         )
     }
 }

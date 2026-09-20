@@ -12,8 +12,8 @@ android {
         applicationId = "pl.radiodrive.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 240
-        versionName = "2.4.0"
+        versionCode = 250
+        versionName = "2.5.0"
     }
     buildFeatures {
         compose = true
@@ -46,6 +46,8 @@ dependencies {
     implementation("androidx.media3:media3-session:1.11.1")
     implementation("androidx.media3:media3-common:1.11.1")
     implementation("androidx.media:media:1.8.0")
+
+    implementation("com.google.android.gms:play-services-auth:21.5.1")
 
     implementation("io.coil-kt.coil3:coil-compose:3.6.3")
     implementation("io.coil-kt.coil3:coil-network-okhttp:3.6.3")

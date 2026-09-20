@@ -3,8 +3,9 @@ package pl.radiodrive.app.data
 import android.content.Context
 import org.json.JSONObject
 import pl.radiodrive.app.model.Station
+import pl.radiodrive.app.sync.SyncClock
 
-class StationOverrides(context: Context) {
+class StationOverrides(private val context: Context) {
     private val prefs = context.getSharedPreferences("station_overrides", Context.MODE_PRIVATE)
 
     fun apply(stations: List<Station>): List<Station> = stations.map(::apply)
@@ -32,11 +33,14 @@ class StationOverrides(context: Context) {
             .put("homepage", station.homepage.orEmpty().trim())
             .put("category", station.category.trim())
             .put("state", station.state.trim())
+            .put("updatedAt", System.currentTimeMillis())
         prefs.edit().putString(station.id, o.toString()).apply()
+        SyncClock.touch(context)
     }
 
     fun reset(stationId: String) {
         prefs.edit().remove(stationId).apply()
+        SyncClock.touch(context)
     }
 
     fun hasOverride(stationId: String): Boolean = prefs.contains(stationId)

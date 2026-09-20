@@ -87,6 +87,12 @@ class StationRepository private constructor(private val context: Context) {
 
     fun isEdited(stationId: String): Boolean = overrides.hasOverride(stationId)
 
+    fun reloadOverrides() {
+        _state.update { state ->
+            state.copy(stations = overrides.apply(baseStations))
+        }
+    }
+
     fun trackClick(stationId: String) {
         scope.launch { runCatching { client.registerClick(stationId) } }
     }
