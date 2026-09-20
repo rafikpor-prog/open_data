@@ -420,7 +420,7 @@ fun GoogleSyncDialog(
                         enabled = !state.syncing,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(Icons.Rounded.AccountCircle, null)
+                        Icon(Icons.Rounded.CloudSync, null)
                         Spacer(Modifier.width(8.dp))
                         Text("Zaloguj kontem Google")
                     }
@@ -430,7 +430,7 @@ fun GoogleSyncDialog(
                         enabled = !state.syncing,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(Icons.Rounded.Backup, null)
+                        Icon(Icons.Rounded.CloudDone, null)
                         Spacer(Modifier.width(8.dp))
                         Text("Utwórz backup teraz")
                     }
@@ -439,7 +439,7 @@ fun GoogleSyncDialog(
                         enabled = !state.syncing,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(Icons.Rounded.Restore, null)
+                        Icon(Icons.Rounded.CloudSync, null)
                         Spacer(Modifier.width(8.dp))
                         Text("Przywróć backup z Google Drive")
                     }
