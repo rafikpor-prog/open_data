@@ -56,15 +56,15 @@ class LegacyAutoMediaService : MediaBrowserServiceCompat() {
                 }
 
                 override fun onPlay() {
-                    controller?.play()
+                    this@LegacyAutoMediaService.controller?.play()
                 }
 
                 override fun onPause() {
-                    controller?.pause()
+                    this@LegacyAutoMediaService.controller?.pause()
                 }
 
                 override fun onStop() {
-                    controller?.stop()
+                    this@LegacyAutoMediaService.controller?.stop()
                 }
             })
             isActive = true
