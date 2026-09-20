@@ -4,55 +4,11 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-
-    <!-- Futuristic RadioDrive mark: radio core + broadcast waves + road -->
-    <path
-        android:fillColor="#0B1018"
-        android:pathData="M54,17a37,37 0,1 0,0 74a37,37 0,1 0,0 -74" />
-
-    <path
-        android:fillColor="#14E6D3"
-        android:pathData="M54,27a27,27 0,1 0,0 54a27,27 0,1 0,0 -54" />
-
-    <path
-        android:fillColor="#0B1018"
-        android:pathData="M54,32a22,22 0,1 0,0 44a22,22 0,1 0,0 -44" />
-
-    <!-- radio display -->
-    <path
-        android:fillColor="#F7B629"
-        android:pathData="M38,42h32c2.2,0 4,1.8 4,4v19c0,2.2 -1.8,4 -4,4h-32c-2.2,0 -4,-1.8 -4,-4v-19c0,-2.2 1.8,-4 4,-4z" />
-
-    <path
-        android:fillColor="#0B1018"
-        android:pathData="M40,48h18v5h-18zM40,57h13v4h-13z" />
-
-    <!-- tuning knob -->
-    <path
-        android:fillColor="#0B1018"
-        android:pathData="M65,52a4.5,4.5 0,1 0,0 9a4.5,4.5 0,1 0,0 -9" />
-
-    <!-- antenna -->
-    <path
-        android:strokeColor="#F7B629"
-        android:strokeWidth="3"
-        android:strokeLineCap="round"
-        android:fillColor="@android:color/transparent"
-        android:pathData="M61,42L70,32" />
-
-    <!-- broadcast waves -->
-    <path
-        android:strokeColor="#14E6D3"
-        android:strokeWidth="3"
-        android:strokeLineCap="round"
-        android:fillColor="@android:color/transparent"
-        android:pathData="M27,42C22,47 22,61 27,66M20,36C11,46 11,63 20,72" />
-
-    <!-- road / navigation motif -->
-    <path
-        android:fillColor="#0B1018"
-        android:pathData="M49,69h10l7,17h-24z" />
-    <path
-        android:fillColor="#F7B629"
-        android:pathData="M52,72h4l1.4,4h-6.8zM50,80h8l1.6,4h-11.2z" />
+    <path android:fillColor="#07111C" android:pathData="M54,13a41,41 0,1 0,0 82a41,41 0,1 0,0 -82"/>
+    <path android:fillColor="#16D7FF" android:pathData="M54,19a35,35 0,1 0,0 70a35,35 0,1 0,0 -70"/>
+    <path android:fillColor="#07111C" android:pathData="M54,24a30,30 0,1 0,0 60a30,30 0,1 0,0 -60"/>
+    <path android:fillColor="#FFB21D" android:pathData="M54,24a30,30 0,0 1,28 19h-6a24,24 0,0 0,-22 -13z"/>
+    <path android:fillColor="#16D7FF" android:pathData="M47,39L72,54L47,69z"/>
+    <path android:fillColor="#16D7FF" android:pathData="M28,45h4v18h-4zM21,49h3v10h-3zM35,40h4v28h-4z"/>
+    <path android:fillColor="#FFB21D" android:pathData="M78,45h4v18h-4zM85,49h3v10h-3z"/>
 </vector>

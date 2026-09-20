@@ -12,8 +12,8 @@ android {
         applicationId = "pl.radiodrive.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 262
-        versionName = "2.6.2"
+        versionCode = 270
+        versionName = "2.7.0"
     }
     buildFeatures {
         compose = true

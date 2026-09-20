@@ -92,7 +92,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class AppTab { HOME, ALL, FAVORITES }
+private enum class AppTab { HOME, ALL, FAVORITES, WEATHER, MORE }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -173,16 +173,39 @@ private fun RadioDriveApp(controller: MediaController?) {
     Scaffold(
         topBar = {
             TopAppBar(
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color(0xFF07111C),
+                    titleContentColor = Color.White,
+                    actionIconContentColor = RadioCyan,
+                    navigationIconContentColor = Color.White
+                ),
                 title = {
                     if (details != null) {
                         Column {
-                            Text(details.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Bold)
-                            Text("RadioDrive • Polska", style = MaterialTheme.typography.labelSmall)
+                            Text(details.name, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Black)
+                            Text("RADIO • LIVE • POLSKA", style = MaterialTheme.typography.labelSmall, color = RadioCyan)
                         }
                     } else {
                         Column {
-                            Text("RadioDrive", fontWeight = FontWeight.Black)
-                            Text("v${BuildConfig.VERSION_NAME} • ${catalog.stations.size} aktywnych polskich stacji", style = MaterialTheme.typography.labelSmall)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("Radio", fontWeight = FontWeight.Black)
+                                Text("Drive", fontWeight = FontWeight.Black, color = RadioCyan)
+                                Spacer(Modifier.width(7.dp))
+                                Surface(shape = CircleShape, color = RadioCyan.copy(alpha = .14f)) {
+                                    Text(
+                                        "2.7",
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = RadioCyan,
+                                        fontWeight = FontWeight.Black
+                                    )
+                                }
+                            }
+                            Text(
+                                "${catalog.stations.size} stacji • muzyka na każdą trasę",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color.White.copy(alpha = .62f)
+                            )
                         }
                     }
                 },
@@ -245,24 +268,48 @@ private fun RadioDriveApp(controller: MediaController?) {
                             }
                         )
                     }
-                    NavigationBar {
+                    NavigationBar(
+                        containerColor = Color(0xFF08131F),
+                        tonalElevation = 10.dp
+                    ) {
                         NavigationBarItem(
                             selected = tab == AppTab.HOME,
                             onClick = { tab = AppTab.HOME },
-                            icon = { Icon(Icons.Rounded.Home, null) },
-                            label = { Text("Start") }
+                            icon = { Icon(Icons.Rounded.Radio, null) },
+                            label = { Text("Radio") },
+                            colors = neonNavigationColors()
                         )
                         NavigationBarItem(
                             selected = tab == AppTab.ALL,
                             onClick = { tab = AppTab.ALL },
-                            icon = { Icon(Icons.Rounded.Radio, null) },
-                            label = { Text("Stacje") }
+                            icon = { Icon(Icons.Rounded.Search, null) },
+                            label = { Text("Odkrywaj") },
+                            colors = neonNavigationColors()
                         )
                         NavigationBarItem(
-                            selected = tab == AppTab.FAVORITES,
-                            onClick = { tab = AppTab.FAVORITES },
-                            icon = { Icon(Icons.Rounded.Favorite, null) },
-                            label = { Text("Ulubione") }
+                            selected = false,
+                            onClick = { addingCustomStation = true },
+                            icon = {
+                                Surface(shape = CircleShape, color = RadioCyan.copy(alpha = .18f)) {
+                                    Icon(Icons.Rounded.Add, "Dodaj stację", Modifier.padding(7.dp), tint = RadioCyan)
+                                }
+                            },
+                            label = { Text("Dodaj") },
+                            colors = neonNavigationColors()
+                        )
+                        NavigationBarItem(
+                            selected = tab == AppTab.WEATHER,
+                            onClick = { tab = AppTab.WEATHER },
+                            icon = { Icon(Icons.Rounded.Cloud, null) },
+                            label = { Text("Pogoda") },
+                            colors = neonNavigationColors()
+                        )
+                        NavigationBarItem(
+                            selected = tab == AppTab.MORE || tab == AppTab.FAVORITES,
+                            onClick = { tab = AppTab.MORE },
+                            icon = { Icon(Icons.Rounded.MoreHoriz, null) },
+                            label = { Text("Więcej") },
+                            colors = neonNavigationColors()
                         )
                     }
                 }
@@ -329,6 +376,22 @@ private fun RadioDriveApp(controller: MediaController?) {
                         detailsId = it.id
                     },
                     onFavorite = { library.toggleFavorite(it); favoriteVersion++ }
+                )
+                AppTab.WEATHER -> WeatherHubScreen(
+                    modifier = Modifier.padding(padding)
+                )
+                AppTab.MORE -> MoreScreen(
+                    modifier = Modifier.padding(padding),
+                    accountEmail = syncState.accountEmail,
+                    favoriteCount = favorites.size,
+                    hiddenCount = hiddenCount,
+                    onGoogle = { showGoogleSync = true },
+                    onFavorites = { tab = AppTab.FAVORITES },
+                    onAddStation = { addingCustomStation = true },
+                    onRestoreHidden = {
+                        repository.restoreHiddenStations()
+                        googleSync.silentAuthorizeAndSync()
+                    }
                 )
             }
         }
@@ -420,6 +483,184 @@ private fun play(controller: MediaController?, repository: StationRepository, st
 }
 
 @Composable
+private fun neonNavigationColors() = NavigationBarItemDefaults.colors(
+    selectedIconColor = RadioCyan,
+    selectedTextColor = RadioCyan,
+    indicatorColor = RadioCyan.copy(alpha = .12f),
+    unselectedIconColor = Color.White.copy(alpha = .58f),
+    unselectedTextColor = Color.White.copy(alpha = .58f),
+)
+
+@Composable
+private fun WeatherHubScreen(modifier: Modifier) {
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        item {
+            NeonSectionHeader(
+                eyebrow = "W TRASIE",
+                title = "Pogoda i komunikaty",
+                subtitle = "Bieżąca pogoda, RSO, Alert RCB i informacje drogowe w jednym miejscu."
+            )
+        }
+        item { WeatherPanel() }
+        item { SafetyAlertsPanel() }
+        item { RoadAssistPanel() }
+    }
+}
+
+@Composable
+private fun MoreScreen(
+    modifier: Modifier,
+    accountEmail: String?,
+    favoriteCount: Int,
+    hiddenCount: Int,
+    onGoogle: () -> Unit,
+    onFavorites: () -> Unit,
+    onAddStation: () -> Unit,
+    onRestoreHidden: () -> Unit,
+) {
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        item {
+            NeonSectionHeader(
+                eyebrow = "RADIODRIVE",
+                title = "Twoje radio",
+                subtitle = "Konto, backup, własne stacje i ustawienia katalogu."
+            )
+        }
+        item {
+            Surface(
+                modifier = Modifier.fillMaxWidth().clickable(onClick = onGoogle),
+                shape = RoundedCornerShape(28.dp),
+                color = Color(0xFF0B1A29),
+                border = androidx.compose.foundation.BorderStroke(1.dp, RadioCyan.copy(alpha = .34f))
+            ) {
+                Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Surface(shape = CircleShape, color = Color.White) {
+                        Text(
+                            "G",
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                            color = Color(0xFF1769E0),
+                            fontWeight = FontWeight.Black,
+                            style = MaterialTheme.typography.titleLarge
+                        )
+                    }
+                    Spacer(Modifier.width(14.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            if (accountEmail == null) "Zaloguj przez Google" else "Konto Google",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Black
+                        )
+                        Text(
+                            accountEmail ?: "Backup i przywracanie ustawień między urządzeniami",
+                            color = Color.White.copy(alpha = .62f),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    Icon(
+                        if (accountEmail == null) Icons.Rounded.Login else Icons.Rounded.CloudDone,
+                        null,
+                        tint = if (accountEmail == null) RadioAmber else RadioCyan
+                    )
+                }
+            }
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                DashboardAction(
+                    modifier = Modifier.weight(1f),
+                    icon = Icons.Rounded.Favorite,
+                    title = "Ulubione",
+                    subtitle = "$favoriteCount stacji",
+                    onClick = onFavorites
+                )
+                DashboardAction(
+                    modifier = Modifier.weight(1f),
+                    icon = Icons.Rounded.AddCircle,
+                    title = "Własny stream",
+                    subtitle = "Dodaj stację",
+                    onClick = onAddStation
+                )
+            }
+        }
+        if (hiddenCount > 0) {
+            item {
+                DashboardAction(
+                    modifier = Modifier.fillMaxWidth(),
+                    icon = Icons.Rounded.Restore,
+                    title = "Przywróć ukryte stacje",
+                    subtitle = "$hiddenCount stacji możesz ponownie pokazać w katalogu",
+                    onClick = onRestoreHidden
+                )
+            }
+        }
+        item {
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = Color(0xFF0A1622)
+            ) {
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Backup Google obejmuje", fontWeight = FontWeight.Black, color = RadioCyan)
+                    listOf(
+                        "własne stacje i adresy streamów",
+                        "zmienione logotypy i dane stacji",
+                        "ulubione oraz historię słuchania",
+                        "ukryte i usunięte z listy stacje"
+                    ).forEach {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Rounded.CheckCircle, null, tint = RadioCyan, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(it, color = Color.White.copy(alpha = .78f))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DashboardAction(
+    modifier: Modifier,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = modifier.clickable(onClick = onClick),
+        shape = RoundedCornerShape(24.dp),
+        color = Color(0xFF0D1A28),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = .06f))
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Surface(shape = CircleShape, color = RadioCyan.copy(alpha = .11f)) {
+                Icon(icon, null, Modifier.padding(9.dp), tint = RadioCyan)
+            }
+            Spacer(Modifier.height(12.dp))
+            Text(title, fontWeight = FontWeight.Black)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = .55f))
+        }
+    }
+}
+
+@Composable
+private fun NeonSectionHeader(eyebrow: String, title: String, subtitle: String) {
+    Column {
+        Text(eyebrow, color = RadioCyan, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Black)
+        Text(title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
+        Text(subtitle, color = Color.White.copy(alpha = .58f), style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
 private fun HomeScreen(
     modifier: Modifier,
     catalog: List<Station>,
@@ -468,7 +709,13 @@ private fun HomeScreen(
 
 @Composable
 private fun NowPlayingHero(current: Station?, isPlaying: Boolean, liveTitle: String?, onDetails: () -> Unit) {
-    val gradient = Brush.linearGradient(listOf(Color(0xFF342100), Color(0xFF073B36), RadioSurface2))
+    val gradient = Brush.linearGradient(
+        listOf(
+            Color(0xFF052A42),
+            Color(0xFF0A2030),
+            Color(0xFF3B2600)
+        )
+    )
     Surface(
         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(30.dp)).clickable(enabled = current != null, onClick = onDetails),
         shape = RoundedCornerShape(30.dp),
@@ -627,7 +874,11 @@ private fun StationTile(
             .clip(RoundedCornerShape(24.dp))
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(24.dp),
-        color = if (active) MaterialTheme.colorScheme.primary.copy(alpha = .12f) else MaterialTheme.colorScheme.surface,
+        color = if (active) RadioCyan.copy(alpha = .10f) else Color(0xFF0D1926),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (active) RadioCyan.copy(alpha = .55f) else Color.White.copy(alpha = .06f)
+        ),
         tonalElevation = if (active) 4.dp else 1.dp
     ) {
         Column(Modifier.padding(12.dp)) {
