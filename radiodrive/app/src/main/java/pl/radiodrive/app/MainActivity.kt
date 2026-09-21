@@ -191,7 +191,7 @@ private fun RadioDriveApp(controller: MediaController?) {
                                 Spacer(Modifier.width(7.dp))
                                 Surface(shape = CircleShape, color = RadioCyan.copy(alpha = .14f)) {
                                     Text(
-                                        "2.8",
+                                        "2.9",
                                         modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
                                         style = MaterialTheme.typography.labelSmall,
                                         color = RadioCyan,
@@ -279,14 +279,15 @@ private fun RadioDriveApp(controller: MediaController?) {
                             colors = neonNavigationColors()
                         )
                         NavigationBarItem(
-                            selected = false,
-                            onClick = { addingCustomStation = true },
+                            selected = tab == AppTab.FAVORITES,
+                            onClick = { tab = AppTab.FAVORITES },
                             icon = {
-                                Surface(shape = CircleShape, color = RadioCyan.copy(alpha = .18f)) {
-                                    Icon(Icons.Rounded.Add, "Dodaj stację", Modifier.padding(7.dp), tint = RadioCyan)
-                                }
+                                Icon(
+                                    if (tab == AppTab.FAVORITES) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                                    "Ulubione stacje"
+                                )
                             },
-                            label = { Text("Dodaj") },
+                            label = { Text("Ulubione") },
                             colors = neonNavigationColors()
                         )
                         NavigationBarItem(
@@ -297,7 +298,7 @@ private fun RadioDriveApp(controller: MediaController?) {
                             colors = neonNavigationColors()
                         )
                         NavigationBarItem(
-                            selected = tab == AppTab.MORE || tab == AppTab.FAVORITES,
+                            selected = tab == AppTab.MORE,
                             onClick = { tab = AppTab.MORE },
                             icon = { Icon(Icons.Rounded.MoreHoriz, null) },
                             label = { Text("Więcej") },
@@ -1114,14 +1115,11 @@ private fun PlayerDetailsScreen(
                                         Icon(Icons.Rounded.SkipNext, "Następna stacja")
                                     }
                                 }
+
+                                Spacer(Modifier.height(10.dp))
+                                CompactWeatherInline()
                             }
                         }
-
-                        HorizontalDivider(
-                            modifier = Modifier.padding(vertical = 14.dp),
-                            color = Color.White.copy(alpha = .08f)
-                        )
-                        CompactWeatherInline()
                     }
                 }
             }
