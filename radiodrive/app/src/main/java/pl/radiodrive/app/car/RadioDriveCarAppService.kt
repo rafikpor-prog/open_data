@@ -7,7 +7,7 @@ import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaControllerCompat
 import androidx.car.app.CarAppService
 import androidx.car.app.CarContext
-import androidx.car.app.ExperimentalCarApi
+import androidx.car.app.annotations.ExperimentalCarApi
 import androidx.car.app.Screen
 import androidx.car.app.Session
 import androidx.car.app.SessionInfo
