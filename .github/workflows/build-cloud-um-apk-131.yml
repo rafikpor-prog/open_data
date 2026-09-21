@@ -24,7 +24,7 @@ jobs:
 
       - name: Rebuild and verify source package
         run: |
-          cat android131-small/part00 android131-small/part01 android131-small/part02 android131-small/part03 android131-small/part04 android131-small/part05 android131-small/part06 > android-build-src.b64
+          cat android131-small/part00 android131-small/part01 android131-small/part02 android131-small/part03 android131-small/part04 android131-small/part05a android131-small/part05b1 android131-small/part05b2a android131-small/part05b2b android131-small/part05b2c android131-small/part06 > android-build-src.b64
           base64 --decode android-build-src.b64 > android-build-src.zip
           echo "734b6fba5486c72b0e0f8bb3fbd7b0c6cf4449cf5c023da2ac290ec49aab95c2  android-build-src.zip" | sha256sum -c -
           unzip -t android-build-src.zip
