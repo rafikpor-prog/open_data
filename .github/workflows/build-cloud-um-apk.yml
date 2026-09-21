@@ -1,0 +1,47 @@
+name: build-cloud-um-apk
+on:
+  push:
+    branches:
+      - tmp-cloud-android-build-20260921
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android-build
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+
+      - name: Install Android SDK
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Build unsigned release
+        run: gradle :app:assembleRelease --stacktrace
+
+      - name: Align APK and collect signing tool
+        run: |
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -p -f 4 app/build/outputs/apk/release/app-release-unsigned.apk CloudUM-1.0.0-unsigned-aligned.apk
+          cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" apksigner.jar
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloud-um-android-build
+          path: |
+            android-build/CloudUM-1.0.0-unsigned-aligned.apk
+            android-build/apksigner.jar
+          retention-days: 1
