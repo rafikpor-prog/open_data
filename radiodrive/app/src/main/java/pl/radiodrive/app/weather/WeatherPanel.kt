@@ -155,3 +155,115 @@ private fun WeatherMetric(
         }
     }
 }
+
+
+@Composable
+fun CompactWeatherInline() {
+    val context = LocalContext.current
+    val repository = remember { WeatherRepository.get(context.applicationContext) }
+    val state by repository.state.collectAsStateWithLifecycle()
+    var permissionGranted by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED
+        )
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        permissionGranted = granted
+        if (granted) repository.refresh()
+    }
+
+    LaunchedEffect(permissionGranted) {
+        if (permissionGranted && state.data == null && !state.loading) repository.refresh()
+    }
+
+    Column(Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                if ((state.data?.weatherCode ?: 3) <= 1) Icons.Rounded.WbSunny else Icons.Rounded.Cloud,
+                null,
+                tint = if ((state.data?.weatherCode ?: 3) <= 1) RadioAmber else RadioCyan,
+                modifier = Modifier.size(22.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "POGODA W TRASIE",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Black,
+                color = RadioCyan
+            )
+            Spacer(Modifier.weight(1f))
+            if (permissionGranted) {
+                IconButton(onClick = repository::refresh, enabled = !state.loading, modifier = Modifier.size(32.dp)) {
+                    if (state.loading) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    else Icon(Icons.Rounded.Refresh, "Odśwież pogodę", Modifier.size(18.dp))
+                }
+            }
+        }
+
+        if (!permissionGranted) {
+            Spacer(Modifier.height(6.dp))
+            OutlinedButton(
+                onClick = { permissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION) }
+            ) {
+                Icon(Icons.Rounded.LocationOn, null, Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Włącz lokalizację")
+            }
+            return@Column
+        }
+
+        state.data?.let { weather ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    if (weather.temperature.isNaN()) "—°" else "${String.format(Locale.US, "%.0f", weather.temperature)}°",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Black
+                )
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        weather.place,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
+                    )
+                    Text(
+                        buildString {
+                            append(weather.description)
+                            if (!weather.apparentTemperature.isNaN()) {
+                                append(" • odczuwalna ")
+                                append(String.format(Locale.US, "%.0f", weather.apparentTemperature))
+                                append("°")
+                            }
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2
+                    )
+                }
+                Column(horizontalAlignment = Alignment.End) {
+                    if (!weather.windSpeed.isNaN()) {
+                        Text(
+                            "${String.format(Locale.US, "%.0f", weather.windSpeed)} km/h",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text("wiatr", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+
+        state.error?.let {
+            Spacer(Modifier.height(4.dp))
+            Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+        }
+    }
+}

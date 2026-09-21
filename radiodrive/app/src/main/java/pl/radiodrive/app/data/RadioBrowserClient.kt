@@ -106,7 +106,7 @@ class RadioBrowserClient {
             requestMethod = "GET"
             connectTimeout = 12_000
             readTimeout = 25_000
-            setRequestProperty("User-Agent", "RadioDrive/2.0 (Android)")
+            setRequestProperty("User-Agent", "RadioDrive/2.8 (Android)")
             setRequestProperty("Accept", "application/json")
             instanceFollowRedirects = true
         }

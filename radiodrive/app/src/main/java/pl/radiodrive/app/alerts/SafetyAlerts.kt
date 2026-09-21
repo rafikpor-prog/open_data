@@ -6,7 +6,11 @@ import android.content.pm.PackageManager
 import android.location.Geocoder
 import android.location.Location
 import android.location.LocationManager
+import android.os.Build
+import android.os.CancellationSignal
 import android.util.Xml
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -30,6 +34,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import org.json.JSONArray
 import org.json.JSONObject
 import org.xmlpull.v1.XmlPullParser
@@ -38,6 +43,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.text.Normalizer
 import java.util.Locale
+import kotlin.coroutines.resume
 
 enum class AlertSource { RCB, RSO, ROAD }
 
@@ -56,6 +62,7 @@ data class SafetyFeedState(
     val alerts: List<SafetyAlert> = emptyList(),
     val error: String? = null,
     val updatedAt: Long = 0L,
+    val currentArea: String? = null,
 )
 
 class SafetyAlertsRepository private constructor(private val context: Context) {
@@ -78,9 +85,11 @@ class SafetyAlertsRepository private constructor(private val context: Context) {
         _state.value = _state.value.copy(loading = true, error = null)
         scope.launch {
             val location = currentLocation()
-            val regionSlug = currentVoivodeshipSlug(location)
+            val regionName = currentVoivodeshipName(location)
+            val regionSlug = regionName?.let(::slug)
             val result = runCatching {
                 val rcb = fetchRcbOfficial()
+                    .filter { matchesRcbLocation(it, regionName) }
                 val rso = fetchRso(regionSlug)
                 val roads = fetchRoads(location)
                 (rcb + rso + roads)
@@ -92,6 +101,7 @@ class SafetyAlertsRepository private constructor(private val context: Context) {
                     alerts = it,
                     loading = false,
                     updatedAt = System.currentTimeMillis(),
+                    currentArea = regionName,
                 )
             }.onFailure {
                 _state.value = _state.value.copy(
@@ -288,7 +298,7 @@ class SafetyAlertsRepository private constructor(private val context: Context) {
             (out[0] / 1000f).toInt()
         } else null
 
-        if (distanceKm != null && distanceKm > 180) return null
+        if (distanceKm != null && distanceKm > 120) return null
 
         val type = when (fields["typ"]) {
             "W" -> "Wypadek"
@@ -314,25 +324,72 @@ class SafetyAlertsRepository private constructor(private val context: Context) {
         )
     }
 
-    private fun currentLocation(): Location? {
+    private suspend fun currentLocation(): Location? {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) return null
         val manager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        val providers = listOf(
+            LocationManager.NETWORK_PROVIDER,
+            LocationManager.GPS_PROVIDER,
+            LocationManager.PASSIVE_PROVIDER
+        ).filter { provider ->
+            runCatching { manager.isProviderEnabled(provider) }.getOrDefault(false)
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            for (provider in providers) {
+                val result = suspendCancellableCoroutine<Location?> { continuation ->
+                    val signal = CancellationSignal()
+                    continuation.invokeOnCancellation { signal.cancel() }
+                    runCatching {
+                        manager.getCurrentLocation(
+                            provider,
+                            signal,
+                            ContextCompat.getMainExecutor(context)
+                        ) { location ->
+                            if (continuation.isActive) continuation.resume(location)
+                        }
+                    }.onFailure {
+                        if (continuation.isActive) continuation.resume(null)
+                    }
+                }
+                if (result != null) return result
+            }
+        }
+
         return manager.getProviders(true)
             .mapNotNull { runCatching { manager.getLastKnownLocation(it) }.getOrNull() }
             .maxByOrNull { it.time }
     }
 
     @Suppress("DEPRECATION")
-    private fun currentVoivodeshipSlug(location: Location?): String? {
+    private fun currentVoivodeshipName(location: Location?): String? {
         location ?: return null
         return runCatching {
-            val area = Geocoder(context, Locale("pl", "PL"))
+            Geocoder(context, Locale("pl", "PL"))
                 .getFromLocation(location.latitude, location.longitude, 1)
                 ?.firstOrNull()
                 ?.adminArea
-                ?: return@runCatching null
-            slug(area)
+                ?.replace("województwo", "", ignoreCase = true)
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
         }.getOrNull()
+    }
+
+    private fun matchesRcbLocation(alert: SafetyAlert, regionName: String?): Boolean {
+        regionName ?: return true
+        val text = slug(listOf(alert.title, alert.body, alert.region).joinToString(" "))
+        val region = slug(regionName)
+        if (region in text) return true
+        if (
+            "cala-polska" in text ||
+            "calej-polsce" in text ||
+            "caly-kraj" in text ||
+            "terenie-kraju" in text
+        ) return true
+
+        // Część komunikatów RCB na stronie gov.pl nie zawiera strukturalnego pola regionu.
+        // Takich alertów nie odrzucamy, żeby nie ukryć komunikatu ogólnopolskiego.
+        return alert.region.isBlank()
     }
 
     private fun slug(value: String): String {
@@ -370,7 +427,7 @@ class SafetyAlertsRepository private constructor(private val context: Context) {
             connectTimeout = 10_000
             readTimeout = 15_000
             instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "RadioDrive/2.4 Android")
+            setRequestProperty("User-Agent", "RadioDrive/2.8 Android")
             setRequestProperty("Accept", "application/json,application/xml,text/xml,*/*")
         }
         return try {
@@ -402,6 +459,22 @@ fun SafetyAlertsPanel() {
     val context = androidx.compose.ui.platform.LocalContext.current
     val repository = remember { SafetyAlertsRepository.get(context.applicationContext) }
     val state by repository.state.collectAsStateWithLifecycle()
+    var permissionGranted by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        permissionGranted = granted
+        if (granted) repository.refresh()
+    }
+
+    LaunchedEffect(permissionGranted) {
+        if (permissionGranted && state.currentArea == null && !state.loading) repository.refresh()
+    }
 
     Surface(shape = RoundedCornerShape(26.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
         Column(Modifier.fillMaxWidth().padding(18.dp)) {
@@ -416,12 +489,33 @@ fun SafetyAlertsPanel() {
                 }
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
-                    Text("Bezpieczeństwo i droga", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Black)
-                    Text("RSO / Alert RCB / GDDKiA", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Komunikaty dla Twojej trasy", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Black)
+                    Text(
+                        buildString {
+                            append("RSO / Alert RCB / GDDKiA")
+                            state.currentArea?.let { append(" • ").append(it) }
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
                 IconButton(onClick = repository::refresh, enabled = !state.loading) {
                     if (state.loading) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                     else Icon(Icons.Rounded.Refresh, "Odśwież komunikaty")
+                }
+            }
+
+            if (!permissionGranted) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "Włącz przybliżoną lokalizację, aby RSO było pobierane dla województwa urządzenia, a utrudnienia drogowe sortowane według odległości.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { permissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION) }
+                ) {
+                    Text("Włącz lokalizację dla komunikatów")
                 }
             }
 

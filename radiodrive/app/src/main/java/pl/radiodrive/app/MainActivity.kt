@@ -45,16 +45,16 @@ import androidx.media3.session.SessionToken
 import coil3.compose.AsyncImage
 import com.google.common.util.concurrent.ListenableFuture
 import pl.radiodrive.app.data.AppMigration
+import pl.radiodrive.app.backup.LocalBackupPanel
 import pl.radiodrive.app.data.StationRepository
 import pl.radiodrive.app.data.UserLibrary
 import pl.radiodrive.app.alerts.SafetyAlertsPanel
 import pl.radiodrive.app.weather.WeatherPanel
+import pl.radiodrive.app.weather.CompactWeatherInline
 import pl.radiodrive.app.model.Station
 import pl.radiodrive.app.playback.RadioPlaybackService
 import pl.radiodrive.app.road.RoadAssistPanel
 import pl.radiodrive.app.stationinfo.StationWebInfoPanel
-import pl.radiodrive.app.sync.GoogleDriveSyncManager
-import pl.radiodrive.app.sync.GoogleSyncDialog
 import pl.radiodrive.app.ui.theme.RadioAmber
 import pl.radiodrive.app.ui.theme.RadioCyan
 import pl.radiodrive.app.ui.theme.RadioDriveTheme
@@ -100,8 +100,6 @@ private fun RadioDriveApp(controller: MediaController?) {
     val context = LocalContext.current
     val repository = remember { StationRepository.get(context.applicationContext) }
     val library = remember { UserLibrary(context.applicationContext) }
-    val googleSync = remember { GoogleDriveSyncManager.get(context.applicationContext) }
-    val syncState by googleSync.state.collectAsStateWithLifecycle()
     val catalog by repository.state.collectAsStateWithLifecycle()
 
     var tab by rememberSaveable { mutableStateOf(AppTab.HOME) }
@@ -114,9 +112,9 @@ private fun RadioDriveApp(controller: MediaController?) {
     var streamMetadata by remember { mutableStateOf<List<String>>(emptyList()) }
     var favoriteVersion by remember { mutableIntStateOf(0) }
     var historyVersion by remember { mutableIntStateOf(0) }
+    var restoredVersion by remember { mutableIntStateOf(0) }
     var editingStation by remember { mutableStateOf<Station?>(null) }
     var addingCustomStation by rememberSaveable { mutableStateOf(false) }
-    var showGoogleSync by rememberSaveable { mutableStateOf(false) }
 
     DisposableEffect(controller) {
         if (controller == null) return@DisposableEffect onDispose { }
@@ -165,7 +163,7 @@ private fun RadioDriveApp(controller: MediaController?) {
         onDispose { controller.removeListener(listener) }
     }
 
-    val favorites = remember(favoriteVersion, syncState.revision) { library.favorites() }
+    val favorites = remember(favoriteVersion, restoredVersion) { library.favorites() }
     val current = catalog.stations.firstOrNull { it.id == currentId }
     val details = catalog.stations.firstOrNull { it.id == detailsId }
     val hiddenCount = repository.hiddenCount()
@@ -193,7 +191,7 @@ private fun RadioDriveApp(controller: MediaController?) {
                                 Spacer(Modifier.width(7.dp))
                                 Surface(shape = CircleShape, color = RadioCyan.copy(alpha = .14f)) {
                                     Text(
-                                        "2.7",
+                                        "2.8",
                                         modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
                                         style = MaterialTheme.typography.labelSmall,
                                         color = RadioCyan,
@@ -215,12 +213,6 @@ private fun RadioDriveApp(controller: MediaController?) {
                     }
                 },
                 actions = {
-                    IconButton(onClick = { showGoogleSync = true }) {
-                        Icon(
-                            if (syncState.accountEmail != null) Icons.Rounded.CloudDone else Icons.Rounded.CloudSync,
-                            "Konto Google i synchronizacja"
-                        )
-                    }
                     if (details != null) {
                         IconButton(onClick = { editingStation = details }) {
                             Icon(Icons.Rounded.Edit, "Edytuj stację")
@@ -328,37 +320,45 @@ private fun RadioDriveApp(controller: MediaController?) {
                 history = remember(details.id, historyVersion) { library.trackHistory(details.id) },
                 streamMetadata = if (details.id == currentId) streamMetadata else emptyList(),
                 favorite = details.id in favorites,
+                onPrevious = {
+                    adjacentStation(catalog.stations, details.id, -1)?.let {
+                        play(controller, repository, it)
+                        detailsId = it.id
+                    }
+                },
                 onPlayPause = {
                     if (details.id != currentId) play(controller, repository, details)
                     else if (controller?.isPlaying == true) controller.pause() else controller?.play()
+                },
+                onStop = { controller?.stop() },
+                onNext = {
+                    adjacentStation(catalog.stations, details.id, 1)?.let {
+                        play(controller, repository, it)
+                        detailsId = it.id
+                    }
                 },
                 onFavorite = { library.toggleFavorite(details.id); favoriteVersion++ }
             )
         } else {
             when (tab) {
-                AppTab.HOME -> HomeScreen(
+                AppTab.HOME -> AllStationsScreen(
                     modifier = Modifier.padding(padding),
-                    catalog = catalog.stations,
-                    current = current,
-                    isPlaying = isPlaying,
-                    liveTitle = liveTitle,
+                    stations = catalog.stations,
                     favorites = favorites,
-                    error = catalog.error,
+                    hiddenCount = hiddenCount,
+                    onRestoreHidden = { repository.restoreHiddenStations() },
                     onStation = {
                         play(controller, repository, it)
                         detailsId = it.id
                     },
-                    onDetails = { current?.let { detailsId = it.id } }
+                    onFavorite = { library.toggleFavorite(it); favoriteVersion++ }
                 )
                 AppTab.ALL -> AllStationsScreen(
                     modifier = Modifier.padding(padding),
                     stations = catalog.stations,
                     favorites = favorites,
                     hiddenCount = hiddenCount,
-                    onRestoreHidden = {
-                        repository.restoreHiddenStations()
-                        googleSync.silentAuthorizeAndSync()
-                    },
+                    onRestoreHidden = { repository.restoreHiddenStations() },
                     onStation = {
                         play(controller, repository, it)
                         detailsId = it.id
@@ -382,15 +382,15 @@ private fun RadioDriveApp(controller: MediaController?) {
                 )
                 AppTab.MORE -> MoreScreen(
                     modifier = Modifier.padding(padding),
-                    accountEmail = syncState.accountEmail,
                     favoriteCount = favorites.size,
                     hiddenCount = hiddenCount,
-                    onGoogle = { showGoogleSync = true },
                     onFavorites = { tab = AppTab.FAVORITES },
                     onAddStation = { addingCustomStation = true },
-                    onRestoreHidden = {
-                        repository.restoreHiddenStations()
-                        googleSync.silentAuthorizeAndSync()
+                    onRestoreHidden = { repository.restoreHiddenStations() },
+                    onBackupRestored = {
+                        restoredVersion++
+                        favoriteVersion++
+                        repository.reloadOverrides()
                     }
                 )
             }
@@ -409,7 +409,6 @@ private fun RadioDriveApp(controller: MediaController?) {
                 repository.saveEditedStation(edited)
                 if (edited.id == currentId) play(controller, repository, edited)
                 editingStation = null
-                googleSync.silentAuthorizeAndSync()
             },
             onReset = {
                 val id = station.id
@@ -418,7 +417,6 @@ private fun RadioDriveApp(controller: MediaController?) {
                     if (id == currentId) play(controller, repository, restored)
                 }
                 editingStation = null
-                googleSync.silentAuthorizeAndSync()
             },
             onDelete = {
                 val id = station.id
@@ -426,7 +424,6 @@ private fun RadioDriveApp(controller: MediaController?) {
                 repository.removeStationFromList(id)
                 editingStation = null
                 detailsId = null
-                googleSync.silentAuthorizeAndSync()
             }
         )
     }
@@ -456,22 +453,12 @@ private fun RadioDriveApp(controller: MediaController?) {
                 )
                 addingCustomStation = false
                 detailsId = created.id
-                googleSync.silentAuthorizeAndSync()
             },
             onReset = {},
             onDelete = {}
         )
     }
 
-    if (showGoogleSync) {
-        GoogleSyncDialog(
-            onDismiss = { showGoogleSync = false },
-            onSynced = {
-                favoriteVersion++
-                repository.reloadOverrides()
-            }
-        )
-    }
 }
 
 private fun play(controller: MediaController?, repository: StationRepository, station: Station) {
@@ -514,13 +501,12 @@ private fun WeatherHubScreen(modifier: Modifier) {
 @Composable
 private fun MoreScreen(
     modifier: Modifier,
-    accountEmail: String?,
     favoriteCount: Int,
     hiddenCount: Int,
-    onGoogle: () -> Unit,
     onFavorites: () -> Unit,
     onAddStation: () -> Unit,
     onRestoreHidden: () -> Unit,
+    onBackupRestored: () -> Unit,
 ) {
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -531,47 +517,10 @@ private fun MoreScreen(
             NeonSectionHeader(
                 eyebrow = "RADIODRIVE",
                 title = "Twoje radio",
-                subtitle = "Konto, backup, własne stacje i ustawienia katalogu."
+                subtitle = "Własne stacje, lokalny backup i pełna kontrola nad katalogiem."
             )
         }
-        item {
-            Surface(
-                modifier = Modifier.fillMaxWidth().clickable(onClick = onGoogle),
-                shape = RoundedCornerShape(28.dp),
-                color = Color(0xFF0B1A29),
-                border = androidx.compose.foundation.BorderStroke(1.dp, RadioCyan.copy(alpha = .34f))
-            ) {
-                Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Surface(shape = CircleShape, color = Color.White) {
-                        Text(
-                            "G",
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
-                            color = Color(0xFF1769E0),
-                            fontWeight = FontWeight.Black,
-                            style = MaterialTheme.typography.titleLarge
-                        )
-                    }
-                    Spacer(Modifier.width(14.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            if (accountEmail == null) "Zaloguj przez Google" else "Konto Google",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Black
-                        )
-                        Text(
-                            accountEmail ?: "Backup i przywracanie ustawień między urządzeniami",
-                            color = Color.White.copy(alpha = .62f),
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                    Icon(
-                        if (accountEmail == null) Icons.Rounded.Login else Icons.Rounded.CloudDone,
-                        null,
-                        tint = if (accountEmail == null) RadioAmber else RadioCyan
-                    )
-                }
-            }
-        }
+        item { LocalBackupPanel(onRestored = onBackupRestored) }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 DashboardAction(
@@ -602,12 +551,9 @@ private fun MoreScreen(
             }
         }
         item {
-            Surface(
-                shape = RoundedCornerShape(24.dp),
-                color = Color(0xFF0A1622)
-            ) {
+            Surface(shape = RoundedCornerShape(24.dp), color = Color(0xFF0A1622)) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Backup Google obejmuje", fontWeight = FontWeight.Black, color = RadioCyan)
+                    Text("Lokalna kopia obejmuje", fontWeight = FontWeight.Black, color = RadioCyan)
                     listOf(
                         "własne stacje i adresy streamów",
                         "zmienione logotypy i dane stacji",
@@ -753,10 +699,18 @@ private fun AllStationsScreen(
 ) {
     var query by rememberSaveable { mutableStateOf("") }
     var category by rememberSaveable { mutableStateOf<String?>(null) }
+    var quickFilter by rememberSaveable { mutableStateOf("ALL") }
+
     val categories = remember(stations) { stations.map { it.category }.distinct().sorted() }
-    val filtered = remember(stations, query, category) {
+    val filtered = remember(stations, favorites, query, category, quickFilter) {
         stations.filter { station ->
-            (category == null || station.category == category) &&
+            val quickOk = when (quickFilter) {
+                "FAV" -> station.id in favorites
+                "CUSTOM" -> station.id.startsWith("custom-")
+                else -> true
+            }
+            quickOk &&
+                (category == null || station.category == category) &&
                 (query.isBlank() ||
                     station.name.contains(query, true) ||
                     station.state.contains(query, true) ||
@@ -767,18 +721,52 @@ private fun AllStationsScreen(
     Column(modifier.fillMaxSize().padding(horizontal = 14.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("Wszystkie stacje", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
-                Text("${filtered.size} z ${stations.size} aktywnych stacji", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Lista stacji", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
+                Text(
+                    "${filtered.size} z ${stations.size} aktywnych stacji",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
             if (hiddenCount > 0) {
-                OutlinedButton(onClick = onRestoreHidden) {
-                    Icon(Icons.Rounded.Restore, null)
-                    Spacer(Modifier.width(6.dp))
-                    Text("Przywróć ukryte ($hiddenCount)")
+                IconButton(onClick = onRestoreHidden) {
+                    Icon(Icons.Rounded.Restore, "Przywróć ukryte stacje", tint = RadioCyan)
                 }
             }
         }
-        Spacer(Modifier.height(10.dp))
+
+        Spacer(Modifier.height(8.dp))
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            item {
+                FilterChip(
+                    selected = quickFilter == "ALL",
+                    onClick = { quickFilter = "ALL"; category = null },
+                    label = { Text("Wszystkie") }
+                )
+            }
+            item {
+                FilterChip(
+                    selected = quickFilter == "FAV",
+                    onClick = { quickFilter = "FAV"; category = null },
+                    label = { Text("Ulubione") }
+                )
+            }
+            item {
+                FilterChip(
+                    selected = quickFilter == "CUSTOM",
+                    onClick = { quickFilter = "CUSTOM"; category = null },
+                    label = { Text("Własne") }
+                )
+            }
+            item {
+                FilterChip(
+                    selected = quickFilter == "GENRE",
+                    onClick = { quickFilter = "GENRE" },
+                    label = { Text("Gatunki") }
+                )
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
@@ -786,22 +774,32 @@ private fun AllStationsScreen(
             singleLine = true,
             shape = RoundedCornerShape(18.dp),
             leadingIcon = { Icon(Icons.Rounded.Search, null) },
-            placeholder = { Text("Nazwa, miasto, region lub gatunek") }
+            placeholder = { Text("Szukaj stacji, miasta lub gatunku") }
         )
-        Spacer(Modifier.height(8.dp))
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            item { FilterChip(selected = category == null, onClick = { category = null }, label = { Text("Wszystkie") }) }
-            items(categories) { item ->
-                FilterChip(
-                    selected = category == item,
-                    onClick = { category = if (category == item) null else item },
-                    label = { Text(item) }
-                )
+
+        if (quickFilter == "GENRE") {
+            Spacer(Modifier.height(8.dp))
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                item {
+                    FilterChip(
+                        selected = category == null,
+                        onClick = { category = null },
+                        label = { Text("Wszystkie gatunki") }
+                    )
+                }
+                items(categories) { item ->
+                    FilterChip(
+                        selected = category == item,
+                        onClick = { category = if (category == item) null else item },
+                        label = { Text(item) }
+                    )
+                }
             }
         }
-        Spacer(Modifier.height(8.dp))
+
+        Spacer(Modifier.height(10.dp))
         LazyVerticalGrid(
-            columns = GridCells.Adaptive(minSize = 148.dp),
+            columns = GridCells.Adaptive(minSize = 142.dp),
             modifier = Modifier.weight(1f),
             contentPadding = PaddingValues(bottom = 18.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -985,7 +983,10 @@ private fun PlayerDetailsScreen(
     history: List<String>,
     streamMetadata: List<String>,
     favorite: Boolean,
+    onPrevious: () -> Unit,
     onPlayPause: () -> Unit,
+    onStop: () -> Unit,
+    onNext: () -> Unit,
     onFavorite: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -994,7 +995,7 @@ private fun PlayerDetailsScreen(
             AsyncImage(
                 model = station.logoUrl,
                 contentDescription = null,
-                modifier = Modifier.matchParentSize().blur(52.dp).alpha(.24f),
+                modifier = Modifier.matchParentSize().blur(56.dp).alpha(.20f),
                 contentScale = ContentScale.Crop
             )
         }
@@ -1004,8 +1005,8 @@ private fun PlayerDetailsScreen(
                 .background(
                     Brush.verticalGradient(
                         listOf(
-                            MaterialTheme.colorScheme.background.copy(alpha = .72f),
-                            MaterialTheme.colorScheme.background.copy(alpha = .93f),
+                            Color(0xFF06111D).copy(alpha = .80f),
+                            Color(0xFF07111C).copy(alpha = .96f),
                             MaterialTheme.colorScheme.background
                         )
                     )
@@ -1013,81 +1014,140 @@ private fun PlayerDetailsScreen(
         )
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(18.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            contentPadding = PaddingValues(14.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             item {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
-                    StationLogo(station, 176.dp)
-                    Spacer(Modifier.height(14.dp))
-                    Surface(shape = CircleShape, color = RadioCyan.copy(alpha = .15f)) {
-                        Text(
-                            if (isBuffering) "  BUFOROWANIE  " else if (isCurrent && isPlaying) "  ● LIVE  " else "  ONLINE  ",
-                            Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            color = RadioCyan,
-                            fontWeight = FontWeight.Black
-                        )
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Text(station.name, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Black)
-                    Text(station.subtitle.ifBlank { "Polska" }, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.height(16.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        FilledIconButton(
-                            onClick = onPlayPause,
-                            modifier = Modifier.size(68.dp),
-                            colors = IconButtonDefaults.filledIconButtonColors(containerColor = RadioAmber, contentColor = Color(0xFF201400))
+                Surface(
+                    shape = RoundedCornerShape(30.dp),
+                    color = Color(0xFF0A1724).copy(alpha = .94f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, RadioCyan.copy(alpha = .28f)),
+                    shadowElevation = 8.dp
+                ) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(if (isCurrent && isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, null, Modifier.size(36.dp))
+                            StationLogo(station, 128.dp)
+                            Spacer(Modifier.width(16.dp))
+                            Column(Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = if (isCurrent && isPlaying) RadioCyan.copy(alpha = .15f) else Color.White.copy(alpha = .07f)
+                                    ) {
+                                        Text(
+                                            if (isBuffering) " BUFOROWANIE " else if (isCurrent && isPlaying) " ● LIVE " else " ONLINE ",
+                                            Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                            color = if (isCurrent && isPlaying) RadioCyan else Color.White.copy(alpha = .75f),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Black
+                                        )
+                                    }
+                                    Spacer(Modifier.weight(1f))
+                                    IconButton(onClick = onFavorite, modifier = Modifier.size(34.dp)) {
+                                        Icon(
+                                            if (favorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                                            "Ulubione",
+                                            tint = if (favorite) RadioAmber else Color.White.copy(alpha = .75f)
+                                        )
+                                    }
+                                }
+                                Spacer(Modifier.height(6.dp))
+                                Text(
+                                    station.name,
+                                    style = MaterialTheme.typography.headlineSmall,
+                                    fontWeight = FontWeight.Black,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    liveTitle ?: station.subtitle.ifBlank { "Polska" },
+                                    color = RadioCyan,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                liveArtist?.let {
+                                    Text(
+                                        it,
+                                        color = Color.White.copy(alpha = .66f),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Spacer(Modifier.height(7.dp))
+                                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                                    if (station.bitrate > 0) TinyDataChip("${station.bitrate} kbps")
+                                    if (station.codec.isNotBlank()) TinyDataChip(station.codec)
+                                    TinyDataChip(if (station.hls) "HLS" else "LIVE")
+                                }
+                                Spacer(Modifier.height(9.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    IconButton(onClick = onPrevious, modifier = Modifier.size(38.dp)) {
+                                        Icon(Icons.Rounded.SkipPrevious, "Poprzednia stacja")
+                                    }
+                                    FilledIconButton(
+                                        onClick = onPlayPause,
+                                        modifier = Modifier.size(46.dp),
+                                        colors = IconButtonDefaults.filledIconButtonColors(
+                                            containerColor = RadioCyan,
+                                            contentColor = Color(0xFF001B24)
+                                        )
+                                    ) {
+                                        Icon(
+                                            if (isCurrent && isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                            "Odtwarzaj / pauza"
+                                        )
+                                    }
+                                    IconButton(onClick = onStop, modifier = Modifier.size(38.dp)) {
+                                        Icon(Icons.Rounded.Stop, "Zatrzymaj")
+                                    }
+                                    IconButton(onClick = onNext, modifier = Modifier.size(38.dp)) {
+                                        Icon(Icons.Rounded.SkipNext, "Następna stacja")
+                                    }
+                                }
+                            }
                         }
-                        FilledTonalIconButton(onClick = onFavorite, modifier = Modifier.size(68.dp)) {
-                            Icon(if (favorite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder, null, tint = if (favorite) RadioAmber else MaterialTheme.colorScheme.onSurface)
-                        }
-                        if (station.homepage != null) {
-                            FilledTonalIconButton(
-                                onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(station.homepage))) } },
-                                modifier = Modifier.size(68.dp)
-                            ) { Icon(Icons.Rounded.Language, "Strona stacji") }
-                        }
+
+                        HorizontalDivider(
+                            modifier = Modifier.padding(vertical = 14.dp),
+                            color = Color.White.copy(alpha = .08f)
+                        )
+                        CompactWeatherInline()
                     }
                 }
             }
-
-            item {
-                InfoPanel(
-                    icon = Icons.Rounded.GraphicEq,
-                    title = "TERAZ GRAMY",
-                    main = liveTitle ?: "Słuchasz ${station.name}",
-                    secondary = liveArtist ?: "Jeśli nadawca przekazuje tytuł utworu lub audycji w strumieniu, RadioDrive pokaże go tutaj automatycznie.",
-                    accent = true
-                )
-            }
-
-            item { WeatherPanel() }
 
             item { SafetyAlertsPanel() }
 
             item {
                 InfoPanel(
                     icon = Icons.Rounded.SkipNext,
-                    title = "NASTĘPNY / RAMÓWKA",
-                    main = "Dane pobierane tylko ze źródeł nadawcy",
-                    secondary = "RadioDrive nie zgaduje kolejnego utworu. Dla stacji, które udostępniają publiczną ramówkę, informacje mogą być prezentowane w sekcji stacji.",
+                    title = "RAMÓWKA / CO DALEJ",
+                    main = "Informacje tylko ze źródeł nadawcy",
+                    secondary = "Jeżeli stacja publikuje ramówkę lub dane „co gramy”, RadioDrive wykorzystuje je bez zgadywania.",
                     accent = false
                 )
             }
 
             item { RoadAssistPanel() }
-
             item { StationWebInfoPanel(station) }
 
             if (streamMetadata.isNotEmpty()) {
                 item {
                     Surface(shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
                         Column(Modifier.fillMaxWidth().padding(18.dp)) {
-                            Text("Metadane emitowane przez strumień", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Black)
+                            Text("Metadane ze strumienia", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Black)
                             Text(
-                                "RadioDrive odbiera wszystkie wpisy metadanych przekazane przez Media3 z ICY / ID3 / HLS.",
+                                "ICY / ID3 / HLS — wszystko, co rzeczywiście przekazuje nadawca.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1112,16 +1172,6 @@ private fun PlayerDetailsScreen(
                 }
             }
 
-            if (station.tags.isNotEmpty()) {
-                item {
-                    Text("Gatunki i tagi", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(8.dp))
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(station.tags) { tag -> AssistChip(onClick = {}, label = { Text(tag) }) }
-                    }
-                }
-            }
-
             if (history.isNotEmpty()) {
                 item {
                     Text("Ostatnio na antenie", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Black)
@@ -1137,6 +1187,22 @@ private fun PlayerDetailsScreen(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun TinyDataChip(text: String) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = Color.White.copy(alpha = .06f),
+        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = .08f))
+    ) {
+        Text(
+            text,
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = Color.White.copy(alpha = .72f)
+        )
     }
 }
 
@@ -1328,121 +1394,211 @@ private fun StationEditorDialog(
 
     val streamOk = streamUrl.trim().startsWith("http://") || streamUrl.trim().startsWith("https://")
     val logoOk = logoUrl.isBlank() || logoUrl.trim().startsWith("http://") || logoUrl.trim().startsWith("https://")
-    val canSave = name.isNotBlank() && streamOk && logoOk
+    val homepageOk = homepage.isBlank() || homepage.trim().startsWith("http://") || homepage.trim().startsWith("https://")
+    val canSave = name.isNotBlank() && streamOk && logoOk && homepageOk
 
-    AlertDialog(
+    androidx.compose.ui.window.Dialog(
         onDismissRequest = onDismiss,
-        title = { Text(title, fontWeight = FontWeight.Black) },
-        text = {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                if (logoUrl.isNotBlank()) {
-                    Surface(
-                        shape = RoundedCornerShape(18.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        modifier = Modifier.align(Alignment.CenterHorizontally)
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = Color(0xFF07111C)
+        ) {
+            Column(Modifier.fillMaxSize()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Rounded.ArrowBack, "Wróć")
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text(title, fontWeight = FontWeight.Black, style = MaterialTheme.typography.titleLarge)
+                        Text(
+                            if (station.id == "custom-new") "NOWA STACJA" else "USTAWIENIA STACJI",
+                            color = RadioCyan,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Black
+                        )
+                    }
+                    FilledIconButton(
+                        onClick = {
+                            onSave(
+                                station.copy(
+                                    name = name.trim(),
+                                    streamUrl = streamUrl.trim(),
+                                    logoUrl = logoUrl.trim().takeIf { it.isNotBlank() },
+                                    homepage = homepage.trim().takeIf { it.isNotBlank() },
+                                    category = category.trim().ifBlank { "Różne" },
+                                    state = state.trim(),
+                                )
+                            )
+                        },
+                        enabled = canSave,
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = RadioCyan,
+                            contentColor = Color(0xFF001B24)
+                        )
                     ) {
-                        AsyncImage(
-                            model = logoUrl,
-                            contentDescription = "Podgląd logo",
-                            modifier = Modifier.size(96.dp).padding(8.dp),
-                            contentScale = ContentScale.Fit
-                        )
+                        Icon(Icons.Rounded.Check, "Zapisz")
                     }
                 }
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Nazwa stacji") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = streamUrl,
-                    onValueChange = { streamUrl = it },
-                    label = { Text("Adres strumienia") },
-                    supportingText = { Text("Bezpośredni publiczny URL MP3/AAC/HLS") },
-                    isError = streamUrl.isNotBlank() && !streamOk,
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = logoUrl,
-                    onValueChange = { logoUrl = it },
-                    label = { Text("Logo – zewnętrzny URL") },
-                    isError = logoUrl.isNotBlank() && !logoOk,
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = homepage,
-                    onValueChange = { homepage = it },
-                    label = { Text("Strona stacji") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = category,
-                        onValueChange = { category = it },
-                        label = { Text("Kategoria") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f)
-                    )
-                    OutlinedTextField(
-                        value = state,
-                        onValueChange = { state = it },
-                        label = { Text("Region") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-                Text(
-                    if (station.id == "custom-new") {
-                        "Własna stacja zostanie dodana do katalogu RadioDrive, Android Auto i backupu Google."
-                    } else {
-                        "Zmiany są zapisywane lokalnie i mają pierwszeństwo nad danymi pobranymi przy odświeżeniu katalogu."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    onSave(
-                        station.copy(
-                            name = name.trim(),
-                            streamUrl = streamUrl.trim(),
-                            logoUrl = logoUrl.trim().takeIf { it.isNotBlank() },
-                            homepage = homepage.trim().takeIf { it.isNotBlank() },
-                            category = category.trim().ifBlank { "Różne" },
-                            state = state.trim(),
+
+                HorizontalDivider(color = Color.White.copy(alpha = .08f))
+
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    item {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(26.dp),
+                            color = Color(0xFF0D1A28),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = .06f))
+                        ) {
+                            Row(
+                                Modifier.fillMaxWidth().padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(20.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant
+                                ) {
+                                    if (logoUrl.isNotBlank()) {
+                                        AsyncImage(
+                                            model = logoUrl,
+                                            contentDescription = "Podgląd logo",
+                                            modifier = Modifier.size(96.dp).padding(8.dp),
+                                            contentScale = ContentScale.Fit
+                                        )
+                                    } else {
+                                        Box(Modifier.size(96.dp), contentAlignment = Alignment.Center) {
+                                            Icon(Icons.Rounded.Radio, null, Modifier.size(40.dp), tint = RadioCyan)
+                                        }
+                                    }
+                                }
+                                Spacer(Modifier.width(14.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text("Logo stacji", fontWeight = FontWeight.Black)
+                                    Text(
+                                        "Wklej bezpośredni link HTTPS/HTTP do grafiki.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    item {
+                        OutlinedTextField(
+                            value = logoUrl,
+                            onValueChange = { logoUrl = it },
+                            label = { Text("Logo – zewnętrzny URL") },
+                            isError = logoUrl.isNotBlank() && !logoOk,
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
                         )
-                    )
-                },
-                enabled = canSave
-            ) {
-                Text("Zapisz")
-            }
-        },
-        dismissButton = {
-            Row {
-                if (canDelete) {
-                    TextButton(onClick = { confirmDelete = true }) {
-                        Text(deleteLabel, color = MaterialTheme.colorScheme.error)
+                    }
+                    item {
+                        OutlinedTextField(
+                            value = name,
+                            onValueChange = { name = it },
+                            label = { Text("Nazwa stacji") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    item {
+                        OutlinedTextField(
+                            value = streamUrl,
+                            onValueChange = { streamUrl = it },
+                            label = { Text("Adres strumienia") },
+                            supportingText = { Text("Bezpośredni publiczny URL MP3 / AAC / HLS") },
+                            isError = streamUrl.isNotBlank() && !streamOk,
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    item {
+                        OutlinedTextField(
+                            value = homepage,
+                            onValueChange = { homepage = it },
+                            label = { Text("Strona WWW (opcjonalnie)") },
+                            isError = homepage.isNotBlank() && !homepageOk,
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    item {
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            OutlinedTextField(
+                                value = category,
+                                onValueChange = { category = it },
+                                label = { Text("Kategoria") },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f)
+                            )
+                            OutlinedTextField(
+                                value = state,
+                                onValueChange = { state = it },
+                                label = { Text("Region") },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                    item {
+                        Text(
+                            if (station.id == "custom-new") {
+                                "Własna stacja pojawi się w pełnym katalogu RadioDrive i Android Auto oraz będzie zapisywana w lokalnym backupie."
+                            } else {
+                                "Twoje zmiany mają pierwszeństwo nad danymi katalogowymi i nie znikną po odświeżeniu listy stacji."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    if (canReset || canDelete) {
+                        item {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                if (canDelete) {
+                                    OutlinedButton(
+                                        onClick = { confirmDelete = true },
+                                        modifier = Modifier.weight(1f),
+                                        colors = ButtonDefaults.outlinedButtonColors(
+                                            contentColor = MaterialTheme.colorScheme.error
+                                        )
+                                    ) {
+                                        Icon(Icons.Rounded.Delete, null)
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(deleteLabel)
+                                    }
+                                }
+                                if (canReset) {
+                                    OutlinedButton(
+                                        onClick = onReset,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(Icons.Rounded.Restore, null)
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("Przywróć")
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
-                if (canReset) {
-                    TextButton(onClick = onReset) { Text("Przywróć dane katalogu") }
-                }
-                TextButton(onClick = onDismiss) { Text("Anuluj") }
             }
         }
-    )
+    }
 
     if (confirmDelete) {
         AlertDialog(
@@ -1451,9 +1607,9 @@ private fun StationEditorDialog(
             text = {
                 Text(
                     if (station.id.startsWith("custom-")) {
-                        "Własna stacja zostanie usunięta z RadioDrive. Jeśli wykonasz backup po tej zmianie, zostanie usunięta także po przywróceniu profilu na innych urządzeniach."
+                        "Własna stacja zostanie usunięta. Nowy lokalny backup będzie już zapisywał stan bez tej stacji."
                     } else {
-                        "Stacja zostanie ukryta w Twojej liście bez usuwania jej ze źródłowego katalogu. Możesz później użyć „Przywróć ukryte”."
+                        "Stacja zostanie ukryta w Twojej liście. W każdej chwili możesz użyć opcji „Przywróć ukryte”."
                     }
                 )
             },
@@ -1472,3 +1628,4 @@ private fun StationEditorDialog(
         )
     }
 }
+

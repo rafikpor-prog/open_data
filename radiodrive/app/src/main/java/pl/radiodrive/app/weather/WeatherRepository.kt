@@ -149,7 +149,7 @@ class WeatherRepository private constructor(private val context: Context) {
             requestMethod = "GET"
             connectTimeout = 10_000
             readTimeout = 15_000
-            setRequestProperty("User-Agent", "RadioDrive/2.3 Android")
+            setRequestProperty("User-Agent", "RadioDrive/2.8 Android")
             setRequestProperty("Accept", "application/json")
         }
 
