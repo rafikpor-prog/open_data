@@ -22,7 +22,7 @@ jobs:
         with:
           gradle-version: '9.6.0'
 
-      - name: Rebuild and verify source package
+      - name: Rebuild, verify and patch source package
         run: |
           cat android131-small/part00 android131-small/part01 android131-small/part02 android131-small/part03 android131-small/part04 android131-small/part05a android131-small/part05b1 android131-small/part05b2a android131-small/part05b2b android131-small/part05b2c android131-small/part06 > android-build-src.b64
           base64 --decode android-build-src.b64 > android-build-src.zip
@@ -30,6 +30,15 @@ jobs:
           unzip -t android-build-src.zip
           mkdir android-build
           unzip -q android-build-src.zip -d android-build
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("android-build/app/src/main/java/pl/przemysl/cloud/mobile/MainActivity.java")
+          s=p.read_text()
+          s=s.replace('replaceAll("\\p{M}+", "")', 'replaceAll("\\\\p{M}+", "")')
+          s=s.replace('replaceAll("\\s+", " ")', 'replaceAll("\\\\s+", " ")')
+          p.write_text(s)
+          PY
+          echo "1e55164e5b387d6d3bd7735d5396d2d26e5adc75001a10bb224064a63d3f00a9  android-build/app/src/main/java/pl/przemysl/cloud/mobile/MainActivity.java" | sha256sum -c -
 
       - name: Install Android SDK
         working-directory: android-build
